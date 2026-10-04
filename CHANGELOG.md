@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1
+
+- Lists only the active week's zone
+- Font list scrolls, and each name is drawn in that font
+- Collapsed background transparency
+- Gear, refresh, and lock icons; the lock stays on the collapsed bar
+- Bottom-right grip resizes the expanded panel and hides while locked
+
 ## 1.0.0
 
 Initial release.

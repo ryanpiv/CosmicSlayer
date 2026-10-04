@@ -15,11 +15,18 @@ for _, zone in ipairs(ZONES) do
 end
 local WEEK_REFRESH = 600
 local COLLAPSED_HEIGHT = 72
+local EXPANDED_WIDTH = 300
 local EXPANDED_HEIGHT = 428
+local MIN_WIDTH = 260
+local MAX_WIDTH = 640
+local MIN_HEIGHT = 340
+local MAX_HEIGHT = 900
 local FLAT = "Interface\\Buttons\\WHITE8X8"
 
 local weekMap
 local weekCheckedAt = 0
+local LayoutBody
+local ApplyPanelSize
 
 local FONT_CANDIDATES = {
     { name = "Friz Quadrata", file = "Fonts\\FRIZQT__.TTF" },
@@ -63,14 +70,18 @@ local defaults = {
     screen = true,
     alertSound = "RAID_WARNING",
     waypoint = true,
+    locked = false,
     collapsed = false,
     alpha = 1,
     transparency = 0.78,
+    collapsedTransparency = 0.10,
     bgR = 0.06,
     bgG = 0.06,
     bgB = 0.06,
     font = 1,
     fontSize = 12,
+    width = EXPANDED_WIDTH,
+    height = EXPANDED_HEIGHT,
     poll = 15,
 }
 
@@ -97,6 +108,8 @@ local chromeFonts = {}
 local settingsFrame
 local settingsSwatch
 local settingsButton
+local lockButton
+local resizeButton
 
 local function TrackContent(fs)
     tinsert(contentFonts, fs)
@@ -183,6 +196,40 @@ local function TrackAchievement()
     RefreshTrackButton()
 end
 
+local function ApplyZoneList()
+    if not panel then
+        return
+    end
+    local collapsed = DB().collapsed
+    for _, zone in ipairs(ZONES) do
+        local show = (not collapsed) and (not weekMap or weekMap == zone.mapID)
+        local header = zoneHeaders[zone.mapID]
+        if header then
+            header:SetText(zone.label)
+            if weekMap == zone.mapID then
+                header:SetTextColor(0.78, 0.86, 0.94)
+            else
+                header:SetTextColor(0.72, 0.76, 0.8)
+            end
+            if show then
+                header:Show()
+            else
+                header:Hide()
+            end
+        end
+        for _, key in ipairs(zone.bosses) do
+            local row = rows[key]
+            if row then
+                if show then
+                    row:Show()
+                else
+                    row:Hide()
+                end
+            end
+        end
+    end
+end
+
 local function RefreshPanel()
     if not panel then
         return
@@ -216,20 +263,6 @@ local function RefreshPanel()
             refreshedText:SetText("Not refreshed yet")
         end
     end
-    for _, zone in ipairs(ZONES) do
-        local header = zoneHeaders[zone.mapID]
-        if weekMap == zone.mapID then
-            header:SetText(zone.label .. "  ·  this week")
-            header:SetTextColor(0.78, 0.86, 0.94)
-        else
-            header:SetText(zone.label)
-            if weekMap then
-                header:SetTextColor(0.42, 0.46, 0.5)
-            else
-                header:SetTextColor(0.72, 0.76, 0.8)
-            end
-        end
-    end
     for _, key in ipairs(WATCH) do
         local row = rows[key]
         if shown[key] then
@@ -239,6 +272,10 @@ local function RefreshPanel()
             row:SetText(key .. " is not up")
             row:SetTextColor(0.65, 0.65, 0.65)
         end
+    end
+    ApplyZoneList()
+    if LayoutBody and not DB().collapsed then
+        LayoutBody()
     end
     RefreshTrackButton()
 end
@@ -606,7 +643,7 @@ local function TintLines(button, r, g, b)
     end
 end
 
-local function MarkButton(name, onClick)
+local function MarkButton(name, onClick, hint)
     local button = CreateFrame("Button", name, panel)
     button:SetSize(16, 16)
     button.lines = {}
@@ -623,12 +660,96 @@ local function MarkButton(name, onClick)
     button.line = line
     button:SetScript("OnEnter", function(self)
         TintLines(self, 1, 1, 1)
+        if hint and GameTooltip then
+            local text = hint
+            if type(hint) == "function" then
+                text = hint()
+            end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(text, 1, 1, 1, 1, true)
+            GameTooltip:Show()
+        end
     end)
     button:SetScript("OnLeave", function(self)
         TintLines(self, 0.82, 0.86, 0.92)
+        if hint and GameTooltip_Hide then
+            GameTooltip_Hide()
+        end
     end)
     button:SetScript("OnClick", onClick)
     return button
+end
+
+local function IconTexture(button, width, height)
+    local tex = button:CreateTexture(nil, "OVERLAY")
+    tex:SetTexture(FLAT)
+    tex:SetSize(width, height)
+    tex:SetVertexColor(0.82, 0.86, 0.92)
+    tinsert(button.lines, tex)
+    return tex
+end
+
+local function DrawRefresh(button)
+    local radius = 4.2
+    local head = math.rad(55)
+    local sweep = math.rad(280)
+    for i = 0, 6 do
+        local angle = head + sweep * (i / 6)
+        local seg = IconTexture(button, 3, 1)
+        seg:SetPoint("CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
+        seg:SetRotation(angle + math.pi / 2)
+    end
+    local tx = math.cos(head) * radius
+    local ty = math.sin(head) * radius
+    local dir = head - math.pi / 2
+    local upper = IconTexture(button, 4, 1)
+    upper:SetPoint("CENTER", tx - 1.2, ty + 0.6)
+    upper:SetRotation(dir + 0.75)
+    local lower = IconTexture(button, 4, 1)
+    lower:SetPoint("CENTER", tx - 1.2, ty - 0.6)
+    lower:SetRotation(dir - 0.75)
+end
+
+local function DrawGrip(button)
+    for i = 0, 2 do
+        local line = IconTexture(button, 4 + i * 3, 1)
+        line:SetPoint("BOTTOMRIGHT", -1, 2 + i * 3)
+        line:SetRotation(math.rad(45))
+    end
+end
+
+local function DrawGear(button)
+    local hub = IconTexture(button, 4, 4)
+    hub:SetPoint("CENTER", 0, 0)
+    for i = 0, 7 do
+        local angle = i * (math.pi / 4)
+        local tooth = IconTexture(button, 2, 3)
+        tooth:SetPoint("CENTER", math.cos(angle) * 5.5, math.sin(angle) * 5.5)
+        tooth:SetRotation(angle)
+    end
+end
+
+local function DrawLock(button, locked)
+    if not button.body then
+        button.body = IconTexture(button, 8, 5)
+        button.shackleL = IconTexture(button, 1, 4)
+        button.shackleR = IconTexture(button, 1, 4)
+        button.shackleT = IconTexture(button, 7, 1)
+    end
+    button.body:ClearAllPoints()
+    button.body:SetPoint("CENTER", 0, -3)
+    button.shackleL:ClearAllPoints()
+    button.shackleR:ClearAllPoints()
+    button.shackleT:ClearAllPoints()
+    if locked then
+        button.shackleL:SetPoint("CENTER", -3, 1)
+        button.shackleR:SetPoint("CENTER", 3, 1)
+        button.shackleT:SetPoint("CENTER", 0, 3)
+    else
+        button.shackleL:SetPoint("CENTER", 1, 3)
+        button.shackleR:SetPoint("CENTER", 7, 3)
+        button.shackleT:SetPoint("CENTER", 4, 5)
+    end
 end
 
 local function PaintButton(button, quiet)
@@ -765,13 +886,13 @@ local function CollapsedHeight()
     return math.max(COLLAPSED_HEIGHT, 8 + (size + 8) * 3)
 end
 
-local function LayoutBody()
+function LayoutBody()
     local size = DB().fontSize or 12
     local step = math.max(18, size + 6)
     local y = -128
     for _, zone in ipairs(ZONES) do
         local header = zoneHeaders[zone.mapID]
-        if header then
+        if header and (not weekMap or weekMap == zone.mapID) then
             header:ClearAllPoints()
             header:SetPoint("TOPLEFT", 14, y)
             y = y - step
@@ -810,11 +931,11 @@ local function ApplyStyle()
         end
     end
     if db.collapsed then
-        panel:SetSize(300, CollapsedHeight())
-        panel:SetBackdropColor(db.bgR, db.bgG, db.bgB, 0.10)
+        ApplyPanelSize()
+        panel:SetBackdropColor(db.bgR, db.bgG, db.bgB, db.collapsedTransparency or 0.10)
         panel:SetBackdropBorderColor(0, 0, 0, 0)
     else
-        panel:SetSize(300, EXPANDED_HEIGHT)
+        ApplyPanelSize()
         panel:SetBackdropColor(db.bgR, db.bgG, db.bgB, db.transparency or 0.78)
         panel:SetBackdropBorderColor(0, 0, 0, 1)
         LayoutBody()
@@ -942,7 +1063,7 @@ end
 
 local function CreateSettings()
     settingsFrame = CreateFrame("Frame", "CosmicSlayerSettings", UIParent, "BackdropTemplate")
-    settingsFrame:SetSize(220, 430)
+    settingsFrame:SetSize(220, 478)
     settingsFrame:SetPoint("TOPLEFT", panel, "TOPRIGHT", 6, 0)
     settingsFrame:SetBackdrop({
         bgFile = FLAT,
@@ -976,15 +1097,16 @@ local function CreateSettings()
     settingsSwatch:SetScript("OnClick", PickBackground)
 
     MakeSlider(settingsFrame, "Transparency", 0.05, 1, 0.01, "transparency", -68, Percent)
-    MakeSlider(settingsFrame, "Frame alpha", 0.15, 1, 0.01, "alpha", -116, Percent)
+    MakeSlider(settingsFrame, "Collapsed transparency", 0.05, 1, 0.01, "collapsedTransparency", -116, Percent)
+    MakeSlider(settingsFrame, "Frame alpha", 0.15, 1, 0.01, "alpha", -164, Percent)
 
     local fontLabel = TrackChrome(settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight"))
-    fontLabel:SetPoint("TOPLEFT", 12, -172)
+    fontLabel:SetPoint("TOPLEFT", 12, -220)
     fontLabel:SetText("Font")
     fontLabel:SetTextColor(0.7, 0.74, 0.78)
 
     local fontButton = FlatButton(Face().name, 180, settingsFrame)
-    fontButton:SetPoint("TOPLEFT", 12, -190)
+    fontButton:SetPoint("TOPLEFT", 12, -238)
     local fontMenu
     local fontRows = {}
     local function ShowFontMenu()
@@ -1095,22 +1217,22 @@ local function CreateSettings()
         ShowFontMenu()
     end)
 
-    MakeSlider(settingsFrame, "Font size", 10, 20, 1, "fontSize", -222, function(value)
+    MakeSlider(settingsFrame, "Font size", 10, 20, 1, "fontSize", -270, function(value)
         return tostring(math.floor(value + 0.5))
     end)
-    MakeSlider(settingsFrame, "Poll", 1, 60, 1, "poll", -270, function(value)
+    MakeSlider(settingsFrame, "Poll", 1, 60, 1, "poll", -318, function(value)
         return tostring(math.floor(value + 0.5)) .. "s"
     end)
 
-    MakeCheck("Screen alert", "screen", -318, settingsFrame)
+    MakeCheck("Screen alert", "screen", -366, settingsFrame)
 
     local soundLabel = TrackChrome(settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight"))
-    soundLabel:SetPoint("TOPLEFT", 12, -348)
+    soundLabel:SetPoint("TOPLEFT", 12, -396)
     soundLabel:SetText("Alert sound")
     soundLabel:SetTextColor(0.7, 0.74, 0.78)
 
     local soundButton = FlatButton(AlertSound().name, 180, settingsFrame)
-    soundButton:SetPoint("TOPLEFT", 12, -366)
+    soundButton:SetPoint("TOPLEFT", 12, -414)
     soundButton:SetScript("OnClick", function(self)
         local db = DB()
         local index = 1
@@ -1128,12 +1250,70 @@ local function CreateSettings()
     end)
 end
 
+local function PanelWidth()
+    local width = DB().width or EXPANDED_WIDTH
+    if width < MIN_WIDTH then
+        width = MIN_WIDTH
+    end
+    if width > MAX_WIDTH then
+        width = MAX_WIDTH
+    end
+    return width
+end
+
+local function PanelHeight()
+    local height = DB().height or EXPANDED_HEIGHT
+    if height < MIN_HEIGHT then
+        height = MIN_HEIGHT
+    end
+    if height > MAX_HEIGHT then
+        height = MAX_HEIGHT
+    end
+    return height
+end
+
+function ApplyPanelSize()
+    if not panel then
+        return
+    end
+    if DB().collapsed then
+        panel:SetSize(PanelWidth(), CollapsedHeight())
+    else
+        panel:SetSize(PanelWidth(), PanelHeight())
+    end
+end
+
+local function SavePanelSize()
+    local db = DB()
+    db.width = panel:GetWidth()
+    db.height = panel:GetHeight()
+    db.width = PanelWidth()
+    db.height = PanelHeight()
+    ApplyPanelSize()
+end
+
+local function ApplyResizeGrip()
+    if not panel or not resizeButton then
+        return
+    end
+    local usable = not DB().locked and not DB().collapsed
+    panel:SetResizable(usable and true or false)
+    if panel.SetResizeBounds then
+        panel:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+    end
+    if usable then
+        resizeButton:Show()
+    else
+        resizeButton:Hide()
+    end
+end
+
 local function ApplyLayout()
     if not panel or not collapseButton then
         return
     end
     local collapsed = DB().collapsed
-    panel:SetSize(300, collapsed and CollapsedHeight() or EXPANDED_HEIGHT)
+    ApplyPanelSize()
     for _, widget in ipairs(detailWidgets) do
         if collapsed then
             widget:Hide()
@@ -1154,18 +1334,13 @@ local function ApplyLayout()
         progressText:SetSpacing(6)
         strikeText:ClearAllPoints()
         strikeText:SetPoint("TOPLEFT", progressText, "BOTTOMLEFT", 0, -6)
-        strikeText:SetWidth(276)
+        strikeText:SetWidth(PanelWidth() - 24)
         strikeText:SetSpacing(6)
         refreshedText:ClearAllPoints()
         refreshedText:SetPoint("TOPLEFT", strikeText, "BOTTOMLEFT", 0, -6)
         refreshedText:SetJustifyH("LEFT")
         refreshedText:SetSpacing(6)
-        refreshButton:ClearAllPoints()
-        refreshButton:SetSize(72, 18)
-        refreshButton:SetPoint("RIGHT", collapseButton, "LEFT", -6, 0)
         refreshButton:Show()
-        refreshButton.label:Show()
-        PaintButton(refreshButton, true)
         waypointButton:ClearAllPoints()
         waypointButton:SetSize(104, 18)
         waypointButton:SetPoint("RIGHT", refreshButton, "LEFT", -6, 0)
@@ -1178,16 +1353,12 @@ local function ApplyLayout()
         progressText:SetPoint("TOPLEFT", 14, -34)
         strikeText:ClearAllPoints()
         strikeText:SetPoint("TOPLEFT", strikeLabel, "BOTTOMLEFT", 0, -2)
-        strikeText:SetWidth(260)
+        strikeText:SetWidth(PanelWidth() - 40)
+        strikeMeta:SetWidth(PanelWidth() - 40)
         strikeText:SetSpacing(0)
         progressText:SetSpacing(0)
         refreshedText:SetSpacing(0)
-        refreshButton:ClearAllPoints()
-        refreshButton:SetSize(96, 20)
-        refreshButton:SetPoint("BOTTOMRIGHT", -12, 12)
         refreshButton:Show()
-        refreshButton.label:Show()
-        PaintButton(refreshButton, false)
         waypointButton:ClearAllPoints()
         waypointButton:SetSize(140, 20)
         waypointButton:SetPoint("LEFT", checks.waypoint, "RIGHT", 6, 0)
@@ -1195,12 +1366,35 @@ local function ApplyLayout()
         waypointButton.label:Show()
         PaintButton(waypointButton, false)
     end
+    ApplyZoneList()
     ApplyStyle()
+    ApplyResizeGrip()
 end
 
 local function ToggleCollapsed()
     DB().collapsed = not DB().collapsed
     ApplyLayout()
+end
+
+local function ApplyLock()
+    if not panel or not lockButton then
+        return
+    end
+    local locked = DB().locked and true or false
+    panel:SetMovable(not locked)
+    if locked then
+        panel:RegisterForDrag()
+    else
+        panel:RegisterForDrag("LeftButton")
+    end
+    DrawLock(lockButton, locked)
+    ApplyResizeGrip()
+end
+
+local function ToggleLock()
+    local db = DB()
+    db.locked = not db.locked
+    ApplyLock()
 end
 
 local function ApplySettings()
@@ -1217,6 +1411,7 @@ local function ApplySettings()
         db.layout = 2
     end
     ApplyLayout()
+    ApplyLock()
 end
 
 local function CreatePanel()
@@ -1234,11 +1429,57 @@ local function CreatePanel()
     panel:EnableMouse(true)
     panel:SetClampedToScreen(true)
     panel:RegisterForDrag("LeftButton")
-    panel:SetScript("OnDragStart", panel.StartMoving)
+    panel:SetScript("OnDragStart", function(self)
+        if DB().locked then
+            return
+        end
+        self:StartMoving()
+    end)
     panel:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
         local point, _, relativePoint, x, y = self:GetPoint(1)
         DB().point = { point, relativePoint, x, y }
+    end)
+    panel:SetResizable(true)
+    if panel.SetResizeBounds then
+        panel:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+    end
+
+    resizeButton = CreateFrame("Button", "CosmicSlayerResize", panel)
+    resizeButton:SetSize(16, 16)
+    resizeButton:SetPoint("BOTTOMRIGHT", -2, 2)
+    resizeButton.lines = {}
+    resizeButton.text = "Resize"
+    DrawGrip(resizeButton)
+    resizeButton:SetScript("OnEnter", function(self)
+        TintLines(self, 1, 1, 1)
+        if GameTooltip then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Resize", 1, 1, 1, 1, true)
+            GameTooltip:Show()
+        end
+    end)
+    resizeButton:SetScript("OnLeave", function(self)
+        TintLines(self, 0.82, 0.86, 0.92)
+        if GameTooltip_Hide then
+            GameTooltip_Hide()
+        end
+    end)
+    resizeButton:SetScript("OnMouseDown", function(_, button)
+        if button ~= "LeftButton" or DB().locked or DB().collapsed then
+            return
+        end
+        panel:StartSizing("BOTTOMRIGHT")
+    end)
+    resizeButton:SetScript("OnMouseUp", function(_, button)
+        if button ~= "LeftButton" then
+            return
+        end
+        panel:StopMovingOrSizing()
+        if DB().locked or DB().collapsed then
+            return
+        end
+        SavePanelSize()
     end)
     panel:Hide()
     panel:HookScript("OnHide", function()
@@ -1258,6 +1499,31 @@ local function CreatePanel()
     collapseButton:SetPoint("RIGHT", closeButton, "LEFT", -2, 0)
     collapseButton.line(7, math.rad(42), -2)
     collapseButton.line(7, math.rad(-42), 2)
+
+    lockButton = MarkButton("CosmicSlayerLock", ToggleLock, function()
+        if DB().locked then
+            return "Unlock"
+        end
+        return "Lock"
+    end)
+    lockButton:SetPoint("RIGHT", collapseButton, "LEFT", -2, 0)
+    lockButton.text = "Lock"
+
+    settingsButton = MarkButton("CosmicSlayerSettingsButton", function()
+        if settingsFrame:IsShown() then
+            settingsFrame:Hide()
+        else
+            settingsFrame:Show()
+        end
+    end, "Settings")
+    settingsButton:SetPoint("RIGHT", lockButton, "LEFT", -2, 0)
+    settingsButton.text = "Settings"
+    DrawGear(settingsButton)
+
+    refreshButton = MarkButton("CosmicSlayerRefresh", Scan, "Refresh")
+    refreshButton:SetPoint("RIGHT", settingsButton, "LEFT", -2, 0)
+    refreshButton.text = "Refresh"
+    DrawRefresh(refreshButton)
 
     titleText = TrackContent(panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight"))
     titleText:SetPoint("TOPLEFT", 14, -10)
@@ -1333,24 +1599,9 @@ local function CreatePanel()
     trackButton:SetScript("OnClick", TrackAchievement)
     AddDetail(trackButton)
 
-    refreshButton = FlatButton("Refresh", 96)
-    refreshButton:SetPoint("BOTTOMRIGHT", -12, 12)
-    refreshButton:SetScript("OnClick", Scan)
-
-    settingsButton = FlatButton("Settings", 72)
-    settingsButton:SetSize(72, 18)
-    settingsButton:SetPoint("RIGHT", collapseButton, "LEFT", -6, 0)
-    settingsButton:SetScript("OnClick", function()
-        if settingsFrame:IsShown() then
-            settingsFrame:Hide()
-        else
-            settingsFrame:Show()
-        end
-    end)
-    AddDetail(settingsButton)
-
     CreateSettings()
     ApplyLayout()
+    ApplyLock()
 end
 
 local function TogglePanel()

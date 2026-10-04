@@ -127,6 +127,19 @@ local function widget(kind, name, template)
         self.width = width
         self.height = height
     end
+    function frame:GetWidth()
+        return self.width or 0
+    end
+    function frame:GetHeight()
+        return self.height or 0
+    end
+    function frame:SetResizable(value)
+        self.resizable = value
+    end
+    function frame:SetResizeBounds() end
+    function frame:StartSizing()
+        self.sizing = true
+    end
     function frame:SetBackdrop() end
     function frame:SetBackdropColor(r, g, b, a)
         self.bg = { r, g, b, a }
@@ -158,7 +171,11 @@ local function widget(kind, name, template)
     function frame:GetPoint()
         return "CENTER", nil, "CENTER", 0, 0
     end
-    function frame:SetMovable() end
+    function frame:SetMovable(movable)
+        self.movable = movable
+    end
+    function frame:StartMoving() end
+    function frame:StopMovingOrSizing() end
     function frame:EnableMouse() end
     function frame:SetClampedToScreen() end
     function frame:RegisterForDrag() end
@@ -546,8 +563,9 @@ scenario("entering Eversong waits 2 seconds, then scans an empty zone", function
     strike, meta = env.strikeWidgets()
     assert(strike.text == "No Void Ritual strike", strike.text)
     assert(meta.text:match("^Last refresh: %d%d:%d%d:%d%d$"), meta.text)
-    assert(env.fontMatching("Eversong Woods  ·  this week")[1], "week header missing")
-    assert(env.fontExact("Zul'Aman"), "Zul'Aman header should stay plain when it is not this week")
+    assert(env.fontExact("Eversong Woods"):IsShown(), "week header missing")
+    assert(env.fontExact("Zul'Aman"):IsShown() == false, "other zone should be hidden")
+    assert(env.fontExact("Grizzly is not up"):IsShown() == false, "other zone bosses should be hidden")
     assert(env.fontMatching("Croaker is not up")[1], "croaker row missing")
     assert(#env.chat == 0)
 end)
@@ -613,7 +631,7 @@ scenario("a void strike spawning in the zone alerts once and marks the boss", fu
     assert(strike.text == "Void Ritual: Croaker", strike.text)
     assert(env.fontMatching("Void Ritual: Croaker")[1], "croaker row was not updated")
     assert(env.fontMatching("Springclaw is not up")[1], "springclaw should stay down")
-    assert(env.fontMatching("Grizzly is not up")[1], "grizzly should stay down")
+    assert(env.fontExact("Grizzly is not up"):IsShown() == false, "other zone should be hidden")
     assert(meta.text:match("^Last refresh: %d%d:%d%d:%d%d$"), meta.text)
     assert(#env.chat == 1)
     assert(#env.sounds == 1)
@@ -740,7 +758,8 @@ scenario("a Zul'Aman strike is found while the week quest says Eversong", functi
     local strike, meta = env.strikeWidgets()
     assert(strike.text == "Void Ritual: Grizzly", strike.text)
     assert(meta.text:match("^Last refresh: %d%d:%d%d:%d%d$"), meta.text)
-    assert(env.fontMatching("Eversong Woods  ·  this week")[1], "week label should stay on Eversong")
+    assert(env.fontExact("Eversong Woods"):IsShown(), "week zone should stay Eversong")
+    assert(env.fontExact("Zul'Aman"):IsShown() == false, "other zone should be hidden")
     assert(#env.chat == 1)
 end)
 
@@ -842,6 +861,23 @@ scenario("the panel opens expanded and collapses to a borderless bar", function(
     assert(env.button("Refresh"):IsShown())
     assert(env.button("Track achievement"):IsShown())
     assert(env.fontExact("3 / 15"))
+    assert(env.CosmicSlayerResize:IsShown(), "resize grip shows while unlocked")
+    panel.width = 360
+    panel.height = 480
+    env.CosmicSlayerResize.scripts.OnMouseUp(env.CosmicSlayerResize, "LeftButton")
+    assert(env.CosmicSlayerDB.width == 360, "resized width")
+    assert(env.CosmicSlayerDB.height == 480, "resized height")
+    panel.width = 300
+    panel.height = 428
+    env.CosmicSlayerResize.scripts.OnMouseUp(env.CosmicSlayerResize, "LeftButton")
+    env.CosmicSlayerLock:Click()
+    assert(env.CosmicSlayerResize:IsShown() == false, "resize grip hides while locked")
+    assert(panel.resizable == false)
+    panel.sizing = false
+    env.CosmicSlayerResize.scripts.OnMouseDown(env.CosmicSlayerResize, "LeftButton")
+    assert(panel.sizing == false, "locked frame does not resize")
+    env.CosmicSlayerLock:Click()
+    assert(env.CosmicSlayerResize:IsShown(), "resize grip returns when unlocked")
     local waiting = env.fontMatching("Not refreshed yet")
     local shownWaiting, hiddenWaiting = 0, 0
     for _, fs in ipairs(waiting) do
@@ -857,12 +893,21 @@ scenario("the panel opens expanded and collapses to a borderless bar", function(
     assert(panel.height == 72, "collapsed height")
     assert(math.abs(panel.bg[4] - 0.10) < 0.001, "collapsed backdrop should be 10% alpha")
     assert(panel.border[4] == 0, "collapsed view has no border")
+    assert(env.CosmicSlayerResize:IsShown() == false, "resize grip hides while collapsed")
     assert(env.button("Track achievement"):IsShown() == false)
     assert(env.fontExact("Croaker is not up"):IsShown() == false)
     assert(env.button("Refresh"):IsShown())
-    assert(env.button("Refresh").label.text == "Refresh")
+    assert(env.CosmicSlayerRefresh:IsShown(), "refresh icon stays on the collapsed bar")
     assert(env.button("Set waypoint"):IsShown())
     assert(env.button("Set waypoint").label.text == "Set waypoint")
+    assert(env.CosmicSlayerLock:IsShown(), "lock stays on the collapsed bar")
+    assert(env.CosmicSlayerSettingsButton:IsShown(), "gear stays on the collapsed bar")
+    assert(panel.movable == true, "frame starts unlocked")
+    env.CosmicSlayerLock:Click()
+    assert(env.CosmicSlayerDB.locked == true)
+    assert(panel.movable == false, "lock stops dragging")
+    env.CosmicSlayerLock:Click()
+    assert(panel.movable == true)
     enter(env, 2395)
     local refreshed
     for _, fs in ipairs(env.fontMatching("Last refresh")) do
@@ -878,6 +923,7 @@ scenario("the panel opens expanded and collapses to a borderless bar", function(
     assert(panel:IsShown() == false, "X should hide the panel")
     toggle:Click()
     assert(panel.height == 428)
+    assert(env.CosmicSlayerResize:IsShown(), "resize grip returns when expanded")
     assert(env.fontExact("Croaker is not up"):IsShown())
 end)
 
@@ -893,6 +939,12 @@ scenario("settings change alpha, transparency, color, font, and size", function(
     env.slider("Transparency"):SetValue(0.4)
     assert(math.abs(panel.bg[4] - 0.4) < 0.001, "transparency")
     assert(math.abs(settings.bg[4] - 0.4) < 0.001, "settings background")
+    env.slider("Collapsed transparency"):SetValue(0.35)
+    assert(math.abs(panel.bg[4] - 0.4) < 0.001, "collapsed slider leaves the expanded backdrop")
+    env.CosmicSlayerCollapse:Click()
+    assert(math.abs(panel.bg[4] - 0.35) < 0.001, "collapsed backdrop")
+    env.CosmicSlayerCollapse:Click()
+    assert(math.abs(panel.bg[4] - 0.4) < 0.001, "expanded backdrop returns")
     env.slider("Frame alpha"):SetValue(0.55)
     assert(math.abs(panel.alpha - 0.55) < 0.001, "alpha")
     assert(math.abs(settings.alpha - 0.55) < 0.001, "settings alpha")

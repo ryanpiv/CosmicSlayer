@@ -1,9 +1,9 @@
 # Publishing to CurseForge
 
-The TOC stays at `1.0.0` until the first publish. Releases are driven by git tags.
+Releases are driven by git tags. The TOC `## Version:` matches the tag, so `v1.0.1` is version `1.0.1`.
 
 ```bash
-git tag v1.0.0
+git tag v1.0.1
 git push && git push --tags
 ```
 
@@ -23,11 +23,11 @@ The CurseForge project is [cosmic-slayer-helper](https://www.curseforge.com/wow/
 
 The upload token is stored on this repo as `CF_API_KEY`.
 
-## Releasing 1.0.0
+## Releasing
 
-1. Confirm `## Version: 1.0.0` in `CosmicSlayer.toc`.
-2. Update `CHANGELOG.md`. Its full contents are the CurseForge changelog.
-3. Commit, tag `v1.0.0`, and push the tag.
+1. Set `## Version:` in `CosmicSlayer.toc` to the new version.
+2. Add that version to the top of `CHANGELOG.md`. Its full contents are the CurseForge changelog.
+3. Commit, tag `v1.0.1` (or the next version), and push the tag.
 
 New uploads sit in CurseForge's approval queue and go live once approved.
 
