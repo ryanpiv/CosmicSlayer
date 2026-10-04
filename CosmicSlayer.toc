@@ -1,0 +1,9 @@
+## Interface: 120100, 120105
+## Title: Cosmic Slayer
+## Notes: Alerts when Springclaw, Croaker, or Grizzly is up for the Cosmic Slayer achievement. /cs
+## Author: CosmicSlayer
+## Version: 1.0.0
+## SavedVariables: CosmicSlayerDB
+## Category: Achievements
+
+CosmicSlayer.lua
