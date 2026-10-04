@@ -2,6 +2,8 @@
 
 Retail WoW addon (Midnight, Interface 120100 / 120105). One folder, no libraries: `CosmicSlayer.toc` and `CosmicSlayer.lua`. Saved variables: `CosmicSlayerDB` in WTF, not in this repo.
 
+The TOC version stays `1.0.0` until the first CurseForge publish. Do not bump it for local changes. See `PUBLISHING.md`.
+
 ## Goal
 
 Notify the player when a Cosmic Slayer boss is the active Void Strike, so they can go get kill credit. Achievement id `62570`, 15 kills.
@@ -18,11 +20,17 @@ These are rotating open-world strikes. One strike is active at a time, and only 
 
 `C_AreaPoiInfo.GetEventsForMap(mapID)` then `GetAreaPOIInfo`. The `name` field is a normal string. Proven in game while Croaker was up: event `8723`, name `Void Ritual: Croaker`, on map `2395`.
 
-Query by map id. Do not require the player to be standing in the zone. Poll about every 10 seconds plus `AREA_POIS_UPDATED`. Alert once per boss name until that name leaves the event list. Chat prefix is `CS`. `/cs` and `/cosmicslayer` toggle the panel.
+Query by map id. Always scan both assault maps, plus the player's current map when it sits under one of them. The week-quest lookup only labels `this week`. It does not choose which map is scanned. A manual Refresh, or opening the panel, scans from anywhere. Automatic scans run every 15 seconds, and on `AREA_POIS_UPDATED`, while the player is in Eversong Woods or Zul'Aman. Walk `C_Map.GetMapInfo` parents so a child map still counts. Entering that zone (`ZONE_CHANGED_NEW_AREA`) scans immediately.
+
+Show a strike whose plain name or description contains `Void Ritual`, `Void Strike`, or a watched boss. Otherwise show one event whose name contains `Incursion`, and set the waypoint from that pin. Do not join unrelated map events into the strike line. A single `isCurrentEvent` name can still show when nothing else matched. If the name is a secret value, pass it to `SetText` and do not call string methods on it. Alert once per boss name until that name leaves the event list. Chat prefix is `CS`. `/cs` and `/cosmicslayer` toggle the panel.
 
 ## Week selection
 
-Only one of Eversong or Zul'Aman has strikes each week. Prefer the map whose `C_TaskQuest.GetQuestsOnMap` list includes a title containing `Void Assaults:`. That list is the map task list, not the quest log. Seen id: `94385` Void Assaults: Eversong Woods. Cache the chosen map for 10 minutes. If the title is missing, scan both maps. Never treat a failed lookup as "no strikes."
+Only one of Eversong or Zul'Aman has strikes each week. Prefer the map whose `C_TaskQuest.GetQuestsOnMap` list includes a title containing `Void Assaults:`. That list is the map task list, not the quest log. Seen id: `94385` Void Assaults: Eversong Woods. `Scan` calls `ActiveMap` so the header can say `this week`. Cache the chosen map for 10 minutes. The cache does not limit which map is scanned. If the title is missing, keep the previous week map. Never treat a failed lookup as "no strikes."
+
+## Tests
+
+From the repo root, `lua tests/scenarios.lua`. The harness fakes the WoW API and drives loading, entering a zone, the 2 second delay, the 15 second ticker, a strike spawning, a strike changing, leaving the zone, a secret strike name, and the waypoint check versus button. Keep `tests/scenarios.lua` out of the toc.
 
 ## Dead ends
 
@@ -36,7 +44,7 @@ Do not build detection on these. They were tried in game.
 
 ## UI settings
 
-`CosmicSlayerDB`: `sound` (raid warning), `chat`, `waypoint` (user waypoint from the pin's `position`), and `point` (panel position). Defaults are all on. Progress text uses `GetAchievementInfo` / `GetAchievementCriteriaInfo` for achievement `62570`.
+`CosmicSlayerDB`: `sound` (raid warning), `chat`, `waypoint` (checkbox: auto user waypoint from the pin's `position` when a watched boss alerts), and `point` (panel position). The Set waypoint button marks the current strike immediately, preferring a watched boss when one is up. Defaults are all on. Progress text uses `GetAchievementInfo` / `GetAchievementCriteriaInfo` for achievement `62570`. Boss rows are grouped under Eversong Woods (Springclaw, Croaker) and Zul'Aman (Grizzly). The active week's header says `this week`. The panel opens expanded. `CosmicSlayerDB.collapsed` remembers a later collapse. Expanded uses a dark transparent backdrop (`0.06, 0.06, 0.06` at `0.78`) and a 1px black edge, the same idea as ElvUI's backdrop, built from `Interface\Buttons\WHITE8X8` rather than ElvUI's own media. Flat buttons replace the default gold button template. Collapsed is a borderless bar at `0.10` alpha with a light X that hides the panel and a two-line arrow that expands or collapses. Collapsed still shows achievement progress, the current strike, last refresh time, and Refresh. Track achievement calls `C_ContentTracking.StartTracking` for `62570`. Clicking again stops tracking.
 
 ## Changing detection
 
