@@ -32,6 +32,10 @@ local function fontString()
     function fs:SetTextColor(r, g, b)
         self.r, self.g, self.b = r, g, b
     end
+    function fs:SetFont(path, size, flags)
+        self.font, self.fontSize, self.fontFlags = path, size, flags
+        return true
+    end
     function fs:Hide()
         self.shown = false
     end
@@ -76,6 +80,49 @@ local function widget(kind, name, template)
     end
     function frame:SetNormalFontObject() end
     function frame:SetHighlightFontObject() end
+    function frame:SetFrameStrata() end
+    function frame:SetScrollChild(child)
+        self.scrollChild = child
+    end
+    function frame:GetScrollChild()
+        return self.scrollChild
+    end
+    function frame:GetVerticalScroll()
+        return self.scroll or 0
+    end
+    function frame:SetVerticalScroll(value)
+        self.scroll = value
+    end
+    function frame:GetHeight()
+        return self.height or 0
+    end
+    function frame:EnableMouseWheel() end
+    function frame:SetAlpha(alpha)
+        self.alpha = alpha
+    end
+    function frame:SetOrientation() end
+    function frame:SetMinMaxValues(minValue, maxValue)
+        self.minValue = minValue
+        self.maxValue = maxValue
+    end
+    function frame:SetValueStep() end
+    function frame:SetObeyStepOnDrag() end
+    function frame:SetThumbTexture()
+        self.thumb = self:CreateTexture()
+    end
+    function frame:GetThumbTexture()
+        return self.thumb
+    end
+    function frame:SetValue(value)
+        self.value = value
+        local fn = self.scripts.OnValueChanged
+        if fn then
+            fn(self, value)
+        end
+    end
+    function frame:GetValue()
+        return self.value
+    end
     function frame:SetSize(width, height)
         self.width = width
         self.height = height
@@ -92,6 +139,7 @@ local function widget(kind, name, template)
         function tex:SetTexture() end
         function tex:SetSize() end
         function tex:SetPoint() end
+        function tex:ClearAllPoints() end
         function tex:SetAllPoints() end
         function tex:SetRotation() end
         function tex:SetVertexColor(r, g, b, a)
@@ -115,7 +163,14 @@ local function widget(kind, name, template)
     function frame:SetClampedToScreen() end
     function frame:RegisterForDrag() end
     function frame:Hide()
+        if self.shown == false then
+            return
+        end
         self.shown = false
+        local fn = self.scripts.OnHide
+        if fn then
+            fn(self)
+        end
     end
     function frame:Show()
         self.shown = true
@@ -149,6 +204,16 @@ local function newWorld()
         created = {},
         chat = {},
         sounds = {},
+        alerts = {},
+        SOUNDKIT = {
+            RAID_WARNING = 8959,
+            READY_CHECK = 8960,
+            ALARM_CLOCK_WARNING_2 = 8961,
+            RAID_BOSS_EMOTE_WARNING = 8962,
+            PVP_THROUGH_QUEUE = 8963,
+        },
+        RaidWarningFrame = {},
+        ChatTypeInfo = { RAID_WARNING = { r = 1, g = 0.28, b = 0.04 } },
         waypoints = {},
         playerMap = 110,
         mapInfo = {
@@ -162,8 +227,18 @@ local function newWorld()
         UIParent = {},
         UISpecialFrames = {},
         SlashCmdList = {},
-        SOUNDKIT = { RAID_WARNING = 8959 },
+        pickR = 1,
+        pickG = 1,
+        pickB = 1,
     }
+
+    env.ColorPickerFrame = {}
+    function env.ColorPickerFrame:SetupColorPickerAndShow(info)
+        env.picker = info
+    end
+    function env.ColorPickerFrame:GetColorRGB()
+        return env.pickR, env.pickG, env.pickB
+    end
 
     function env.secret(value)
         return secret(value)
@@ -255,6 +330,15 @@ local function newWorld()
         error("current strike label is missing")
     end
 
+    function env.slider(label)
+        for _, frame in ipairs(env.created) do
+            if frame.kind == "Slider" and frame.text == label then
+                return frame
+            end
+        end
+        error("missing slider " .. label)
+    end
+
     function env.button(label)
         for _, frame in ipairs(env.created) do
             if frame.text == label then
@@ -297,7 +381,12 @@ local function newWorld()
         table.insert(env.timers, { at = env.clock + delay, fn = fn })
     end
     function env.C_Timer.NewTicker(interval, fn)
-        table.insert(env.timers, { at = env.clock + interval, fn = fn, ticker = true, interval = interval })
+        local ticker = { at = env.clock + interval, fn = fn, ticker = true, interval = interval }
+        function ticker:Cancel()
+            self.dead = true
+        end
+        table.insert(env.timers, ticker)
+        return ticker
     end
 
     env.C_Map = {
@@ -357,6 +446,9 @@ local function newWorld()
     function env.PlaySound(sound)
         table.insert(env.sounds, sound)
     end
+    function env.RaidNotice_AddMessage(_, text)
+        table.insert(env.alerts, text)
+    end
     function env.GetAchievementInfo()
         return "Cosmic Slayer", nil, nil, false
     end
@@ -383,6 +475,7 @@ local function newWorld()
             table = table,
             math = math,
             error = error,
+            pcall = pcall,
             select = select,
             next = next,
             tinsert = table.insert,
@@ -437,7 +530,7 @@ scenario("loading outside a strike zone does not scan", function()
     end)
     local strike, meta = env.strikeWidgets()
     assert(strike.text == "Waiting for first scan", strike.text)
-    assert(meta.text == "Paused outside the strike zone", meta.text)
+    assert(meta.text == "Not refreshed yet", meta.text)
     assert(#env.chat == 0)
 end)
 
@@ -452,8 +545,7 @@ scenario("entering Eversong waits 2 seconds, then scans an empty zone", function
     env.advance(2)
     strike, meta = env.strikeWidgets()
     assert(strike.text == "No Void Ritual strike", strike.text)
-    assert(meta.text:find("Every 15s", 1, true), meta.text)
-    assert(meta.text:find("0 events", 1, true), meta.text)
+    assert(meta.text:match("^Last refresh: %d%d:%d%d:%d%d$"), meta.text)
     assert(env.fontMatching("Eversong Woods  ·  this week")[1], "week header missing")
     assert(env.fontExact("Zul'Aman"), "Zul'Aman header should stay plain when it is not this week")
     assert(env.fontMatching("Croaker is not up")[1], "croaker row missing")
@@ -485,9 +577,28 @@ scenario("fifteen seconds in the zone picks up a strike that spawned quietly", f
     local strike, meta = env.strikeWidgets()
     assert(strike.text == "Void Ritual: Croaker", strike.text)
     assert(meta.text ~= before, "scan clock did not move\nbefore: " .. tostring(before) .. "\nafter:  " .. tostring(meta.text))
-    assert(meta.text:find("1 events", 1, true), meta.text)
+    assert(meta.text:match("^Last refresh: %d%d:%d%d:%d%d$"), meta.text)
     assert(#env.chat == 1, "expected one alert, got " .. #env.chat)
     assert(env.chat[1]:find("Croaker is up", 1, true), env.chat[1])
+end)
+
+scenario("the poll slider changes the automatic scan interval", function()
+    local env = boot(function(world)
+        world.playerMap = 2395
+        eversongWeek(world)
+    end)
+    enter(env, 2395)
+    assert(env.CosmicSlayerDB.poll == 15)
+    env.slider("Poll"):SetValue(30)
+    assert(env.CosmicSlayerDB.poll == 30)
+    env.addEvent(2395, { id = 8723, name = "Void Ritual: Croaker", x = 0.41, y = 0.62, isCurrentEvent = true })
+    env.advance(15)
+    local strike = env.strikeWidgets()
+    assert(strike.text == "No Void Ritual strike", "polled before 30 seconds")
+    env.advance(15)
+    strike = env.strikeWidgets()
+    assert(strike.text == "Void Ritual: Croaker", strike.text)
+    assert(#env.chat == 1)
 end)
 
 scenario("a void strike spawning in the zone alerts once and marks the boss", function()
@@ -503,14 +614,44 @@ scenario("a void strike spawning in the zone alerts once and marks the boss", fu
     assert(env.fontMatching("Void Ritual: Croaker")[1], "croaker row was not updated")
     assert(env.fontMatching("Springclaw is not up")[1], "springclaw should stay down")
     assert(env.fontMatching("Grizzly is not up")[1], "grizzly should stay down")
-    assert(meta.text:find("Eversong", 1, true), meta.text)
+    assert(meta.text:match("^Last refresh: %d%d:%d%d:%d%d$"), meta.text)
     assert(#env.chat == 1)
     assert(#env.sounds == 1)
     assert(env.sounds[1] == env.SOUNDKIT.RAID_WARNING)
+    assert(env.alerts[1] == "Croaker is up", tostring(env.alerts[1]))
     assert(#env.waypoints == 1)
     assert(env.waypoints[1].mapID == 2395)
     assert(env.waypoints[1].x == 0.41)
     assert(env.superTracked == true)
+end)
+
+scenario("the screen alert can be turned off", function()
+    local env = boot(function(world)
+        world.playerMap = 2395
+        eversongWeek(world)
+    end)
+    enter(env, 2395)
+    local box = env.checks()[4]
+    box:SetChecked(false)
+    box:Click()
+    env.addEvent(2395, { id = 8723, name = "Void Ritual: Croaker", x = 0.41, y = 0.62, isCurrentEvent = true })
+    env.fire("AREA_POIS_UPDATED")
+    assert(#env.alerts == 0, "screen alert still fired")
+    assert(#env.chat == 1)
+    assert(#env.sounds == 1)
+end)
+
+scenario("the alert sound can be changed", function()
+    local env = boot(function(world)
+        world.playerMap = 2395
+        eversongWeek(world)
+    end)
+    enter(env, 2395)
+    env.button("Raid warning"):Click()
+    env.addEvent(2395, { id = 8723, name = "Void Ritual: Croaker", x = 0.41, y = 0.62, isCurrentEvent = true })
+    env.fire("AREA_POIS_UPDATED")
+    assert(env.sounds[#env.sounds] == env.SOUNDKIT.READY_CHECK, tostring(env.sounds[#env.sounds]))
+    assert(env.alerts[1] == "Croaker is up")
 end)
 
 scenario("more time with the same strike does not alert again", function()
@@ -576,7 +717,7 @@ scenario("leaving the zone pauses updates until Refresh", function()
     env.fire("ZONE_CHANGED_NEW_AREA")
     local strike, meta = env.strikeWidgets()
     assert(strike.text == "Void Ritual: Croaker", strike.text)
-    assert(meta.text:find("Paused", 1, true), meta.text)
+    assert(meta.text:match("^Last refresh: %d%d:%d%d:%d%d$"), meta.text)
     env.clearEvents()
     env.addEvent(2437, { id = 8800, name = "Void Ritual: Grizzly", x = 0.2, y = 0.8, isCurrentEvent = true })
     env.advance(20)
@@ -598,7 +739,7 @@ scenario("a Zul'Aman strike is found while the week quest says Eversong", functi
     enter(env, 2437)
     local strike, meta = env.strikeWidgets()
     assert(strike.text == "Void Ritual: Grizzly", strike.text)
-    assert(meta.text:find("Zul'Aman", 1, true), meta.text)
+    assert(meta.text:match("^Last refresh: %d%d:%d%d:%d%d$"), meta.text)
     assert(env.fontMatching("Eversong Woods  ·  this week")[1], "week label should stay on Eversong")
     assert(#env.chat == 1)
 end)
@@ -613,7 +754,7 @@ scenario("a child map of Eversong is included in the scan", function()
     enter(env, 9001)
     local strike, meta = env.strikeWidgets()
     assert(strike.text == "Void Ritual: Springclaw", strike.text)
-    assert(meta.text:find("Eversong", 1, true), meta.text)
+    assert(meta.text:match("^Last refresh: %d%d:%d%d:%d%d$"), meta.text)
     assert(env.fontMatching("Void Ritual: Springclaw")[1], "springclaw row missing")
     assert(#env.chat == 1)
 end)
@@ -693,12 +834,24 @@ scenario("the panel opens expanded and collapses to a borderless bar", function(
     end)
     local panel = env.panel()
     assert(panel.height == 428, "panel should open expanded")
+    for _, name in ipairs(env.UISpecialFrames) do
+        assert(name ~= "CosmicSlayerFrame", "escape should leave the panel open")
+    end
     assert(math.abs(panel.bg[4] - 0.78) < 0.001, "expanded backdrop should be ElvUI-dark")
     assert(panel.border[4] == 1)
     assert(env.button("Refresh"):IsShown())
     assert(env.button("Track achievement"):IsShown())
     assert(env.fontExact("3 / 15"))
-    assert(env.fontExact("Not refreshed yet"):IsShown() == false)
+    local waiting = env.fontMatching("Not refreshed yet")
+    local shownWaiting, hiddenWaiting = 0, 0
+    for _, fs in ipairs(waiting) do
+        if fs:IsShown() then
+            shownWaiting = shownWaiting + 1
+        else
+            hiddenWaiting = hiddenWaiting + 1
+        end
+    end
+    assert(shownWaiting == 1 and hiddenWaiting == 1, "refresh time shows once while expanded")
     local toggle = env.CosmicSlayerCollapse
     toggle:Click()
     assert(panel.height == 72, "collapsed height")
@@ -708,9 +861,16 @@ scenario("the panel opens expanded and collapses to a borderless bar", function(
     assert(env.fontExact("Croaker is not up"):IsShown() == false)
     assert(env.button("Refresh"):IsShown())
     assert(env.button("Refresh").label.text == "Refresh")
+    assert(env.button("Set waypoint"):IsShown())
+    assert(env.button("Set waypoint").label.text == "Set waypoint")
     enter(env, 2395)
-    local refreshed = env.fontMatching("Last refresh")[1]
-    assert(refreshed and refreshed:IsShown(), "last refresh should show while collapsed")
+    local refreshed
+    for _, fs in ipairs(env.fontMatching("Last refresh")) do
+        if fs:IsShown() then
+            refreshed = fs
+        end
+    end
+    assert(refreshed, "last refresh should show while collapsed")
     local strike = env.strikeWidgets()
     assert(strike.text == "No Void Ritual strike", strike.text)
     panel:Show()
@@ -719,6 +879,54 @@ scenario("the panel opens expanded and collapses to a borderless bar", function(
     toggle:Click()
     assert(panel.height == 428)
     assert(env.fontExact("Croaker is not up"):IsShown())
+end)
+
+scenario("settings change alpha, transparency, color, font, and size", function()
+    local env = boot(function(world)
+        world.playerMap = 110
+    end)
+    local settings = env.CosmicSlayerSettings
+    assert(settings:IsShown() == false)
+    env.button("Settings"):Click()
+    assert(settings:IsShown())
+    local panel = env.panel()
+    env.slider("Transparency"):SetValue(0.4)
+    assert(math.abs(panel.bg[4] - 0.4) < 0.001, "transparency")
+    assert(math.abs(settings.bg[4] - 0.4) < 0.001, "settings background")
+    env.slider("Frame alpha"):SetValue(0.55)
+    assert(math.abs(panel.alpha - 0.55) < 0.001, "alpha")
+    assert(math.abs(settings.alpha - 0.55) < 0.001, "settings alpha")
+    env.button("Friz Quadrata"):Click()
+    local morpheus = env.button("Morpheus")
+    assert(morpheus.label.font:find("MORPHEUS", 1, true), "each font name previews its own face")
+    assert(env.button("Arial Narrow").label.font:find("ARIALN", 1, true), "arial row")
+    local scroll = env.CosmicSlayerFontScroll
+    assert(scroll.scripts.OnMouseWheel, "font list should scroll")
+    assert(scroll.scrollChild.height > scroll.height, "font list is taller than the window")
+    env.button("Arial Narrow"):Click()
+    local title = env.fontExact("Cosmic Slayer")
+    assert(title.font:find("ARIALN", 1, true), tostring(title.font))
+    local settingsTitle
+    for _, fs in ipairs(settings.fontStrings) do
+        if fs.text == "Settings" then
+            settingsTitle = fs
+        end
+    end
+    assert(settingsTitle and settingsTitle.font:find("ARIALN", 1, true), "settings pane font")
+    env.slider("Font size"):SetValue(16)
+    assert(title.fontSize == 16, tostring(title.fontSize))
+    env.pickR, env.pickG, env.pickB = 0.2, 0.4, 0.6
+    env.button("Background"):Click()
+    env.picker.swatchFunc()
+    assert(math.abs(panel.bg[1] - 0.2) < 0.001)
+    assert(math.abs(panel.bg[2] - 0.4) < 0.001)
+    assert(math.abs(panel.bg[3] - 0.6) < 0.001)
+    assert(math.abs(panel.bg[4] - 0.4) < 0.001, "color keeps transparency")
+    assert(math.abs(settings.bg[1] - 0.2) < 0.001, "settings color")
+    assert(math.abs(settings.bg[4] - 0.4) < 0.001, "settings keeps transparency")
+    panel:Show()
+    env.CosmicSlayerClose:Click()
+    assert(settings:IsShown() == false, "closing the panel hides settings")
 end)
 
 if failures > 0 then

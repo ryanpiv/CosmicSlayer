@@ -13,28 +13,15 @@ uploads it to CurseForge, and attaches the zip to a GitHub release. Until the
 project id and API token below exist, a tag push still creates the GitHub
 release and skips the CurseForge upload.
 
-## Create the project first
+## Project
 
-CurseForge will not accept an upload until the project exists.
+The CurseForge project is [cosmic-slayer-helper](https://www.curseforge.com/wow/addons/cosmic-slayer-helper), project ID `1725635`. That public page stays a 404 until the first file is approved. The ID is already in `CosmicSlayer.toc`:
 
-1. Open [authors.curseforge.com](https://authors.curseforge.com) → Projects →
-   Create a Project → World of Warcraft → Addon.
-2. Name it Cosmic Slayer. Summary can match the TOC notes. Category:
-   Achievements.
-3. Copy the project ID from the About Project box on the project overview.
-4. Add it to `CosmicSlayer.toc`:
+```
+## X-Curse-Project-ID: 1725635
+```
 
-   ```
-   ## X-Curse-Project-ID: 123456
-   ```
-
-5. Generate an API token at authors.curseforge.com → Account → API Tokens.
-   The same token used by Arcane Salvo Tracker works here. Store it on this
-   repo:
-
-   ```bash
-   gh secret set CF_API_KEY --repo ryanpiv/CosmicSlayer
-   ```
+The upload token is stored on this repo as `CF_API_KEY`.
 
 ## Releasing 1.0.0
 

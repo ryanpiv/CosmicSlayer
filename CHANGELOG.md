@@ -7,5 +7,7 @@ Initial release.
 - Alerts when Springclaw, Croaker, or Grizzly is the active Void Ritual
 - Shows the current strike, including a Void Incursion when no watched boss is up
 - Achievement progress for Cosmic Slayer, with a button to track it
-- Optional raid warning, chat message, and waypoint
-- Collapsed bar with the count, strike, last refresh, and Refresh
+- Optional sound, chat message, center-screen alert, and waypoint
+- Choice of alert sound, and a poll interval from 1 to 60 seconds
+- Collapsed bar with the count, strike, last refresh, Set waypoint, and Refresh
+- Settings for frame alpha, background color and transparency, font, and font size

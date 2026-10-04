@@ -3,6 +3,7 @@
 ## Notes: Alerts when Springclaw, Croaker, or Grizzly is up for the Cosmic Slayer achievement. /cs
 ## Author: CosmicSlayer
 ## Version: 1.0.0
+## X-Curse-Project-ID: 1725635
 ## SavedVariables: CosmicSlayerDB
 ## Category: Achievements
 
