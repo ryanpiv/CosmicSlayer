@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.2
+
+- Tracks the strike map pin instead of dropping a user waypoint. The game clears it when the strike ends
+- Auto track follows the current strike when it changes. The top-bar crosshair tracks it manually
+- Boss spawn ping alerts when a Cosmic Slayer boss creature appears, then tracks that strike
+- Settings are grouped into Alerts, Tracking, Appearance, and Scanning. Sound and font are dropdowns
+- Header icons use Blizzard art, with hover, and the panel sizes to its contents
+
 ## 1.0.1
 
 - Lists only the active week's zone

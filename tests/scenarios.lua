@@ -22,6 +22,11 @@ local function fontString()
     function fs:ClearAllPoints() end
     function fs:SetWidth() end
     function fs:SetJustifyH() end
+    function fs:SetJustifyV() end
+    function fs:SetMaxLines() end
+    function fs:GetStringWidth()
+        return 120
+    end
     function fs:SetWordWrap() end
     function fs:SetText(text)
         self.text = text
@@ -64,7 +69,13 @@ local function widget(kind, name, template)
         self.scripts[script] = fn
     end
     function frame:HookScript(script, fn)
-        self.scripts[script] = fn
+        local prev = self.scripts[script]
+        self.scripts[script] = function(...)
+            if prev then
+                prev(...)
+            end
+            return fn(...)
+        end
     end
     function frame:SetText(text)
         self.text = text
@@ -127,6 +138,12 @@ local function widget(kind, name, template)
         self.width = width
         self.height = height
     end
+    function frame:SetWidth(width)
+        self.width = width
+    end
+    function frame:SetHeight(height)
+        self.height = height
+    end
     function frame:GetWidth()
         return self.width or 0
     end
@@ -150,6 +167,9 @@ local function widget(kind, name, template)
     function frame:CreateTexture()
         local tex = { shown = true }
         function tex:SetTexture() end
+        function tex:SetTexCoord() end
+        function tex:SetAtlas() end
+        function tex:SetAlpha() end
         function tex:SetSize() end
         function tex:SetPoint() end
         function tex:ClearAllPoints() end
@@ -168,6 +188,12 @@ local function widget(kind, name, template)
     end
     function frame:SetPoint() end
     function frame:ClearAllPoints() end
+    function frame:GetLeft() end
+    function frame:GetTop() end
+    function frame:SetClipsChildren() end
+    function frame:SetHighlightTexture() end
+    function frame:SetNormalTexture() end
+    function frame:SetPushedTexture() end
     function frame:GetPoint()
         return "CENTER", nil, "CENTER", 0, 0
     end
@@ -232,6 +258,10 @@ local function newWorld()
         RaidWarningFrame = {},
         ChatTypeInfo = { RAID_WARNING = { r = 1, g = 0.28, b = 0.04 } },
         waypoints = {},
+        pins = {},
+        Enum = {
+            SuperTrackingMapPinType = { AreaPOI = "AreaPOI" },
+        },
         playerMap = 110,
         mapInfo = {
             [2395] = { parentMapID = 0, name = "Eversong Woods" },
@@ -421,6 +451,9 @@ local function newWorld()
         SetSuperTrackedUserWaypoint = function()
             env.superTracked = true
         end,
+        SetSuperTrackedMapPin = function(pinType, poiID)
+            table.insert(env.pins, { pinType = pinType, poiID = poiID })
+        end,
     }
     env.UiMapPoint = {
         CreateFromCoordinates = function(mapID, x, y)
@@ -579,7 +612,7 @@ scenario("fifteen seconds outside the zone does not scan", function()
     local strike = env.strikeWidgets()
     assert(strike.text == "Waiting for first scan", strike.text)
     assert(#env.chat == 0)
-    assert(#env.waypoints == 0)
+    assert(#env.pins == 0)
 end)
 
 scenario("fifteen seconds in the zone picks up a strike that spawned quietly", function()
@@ -636,11 +669,10 @@ scenario("a void strike spawning in the zone alerts once and marks the boss", fu
     assert(#env.chat == 1)
     assert(#env.sounds == 1)
     assert(env.sounds[1] == env.SOUNDKIT.RAID_WARNING)
-    assert(env.alerts[1] == "Croaker is up", tostring(env.alerts[1]))
-    assert(#env.waypoints == 1)
-    assert(env.waypoints[1].mapID == 2395)
-    assert(env.waypoints[1].x == 0.41)
-    assert(env.superTracked == true)
+    assert(env.alerts[1] == "CS: Croaker is up", tostring(env.alerts[1]))
+    assert(#env.pins == 1)
+    assert(env.pins[1].pinType == "AreaPOI")
+    assert(env.pins[1].poiID == 8723)
 end)
 
 scenario("the screen alert can be turned off", function()
@@ -649,7 +681,7 @@ scenario("the screen alert can be turned off", function()
         eversongWeek(world)
     end)
     enter(env, 2395)
-    local box = env.checks()[4]
+    local box = env.checks()[2]
     box:SetChecked(false)
     box:Click()
     env.addEvent(2395, { id = 8723, name = "Void Ritual: Croaker", x = 0.41, y = 0.62, isCurrentEvent = true })
@@ -665,11 +697,13 @@ scenario("the alert sound can be changed", function()
         eversongWeek(world)
     end)
     enter(env, 2395)
-    env.button("Raid warning"):Click()
+    env.button("Warning horn"):Click()
+    env.button("Ready check"):Click()
     env.addEvent(2395, { id = 8723, name = "Void Ritual: Croaker", x = 0.41, y = 0.62, isCurrentEvent = true })
     env.fire("AREA_POIS_UPDATED")
+    assert(env.CosmicSlayerDB.alertSound == "READY_CHECK")
     assert(env.sounds[#env.sounds] == env.SOUNDKIT.READY_CHECK, tostring(env.sounds[#env.sounds]))
-    assert(env.alerts[1] == "Croaker is up")
+    assert(env.alerts[1] == "CS: Croaker is up")
 end)
 
 scenario("more time with the same strike does not alert again", function()
@@ -703,7 +737,7 @@ scenario("the strike changing clears the old boss and alerts the new one", funct
     assert(env.fontMatching("Void Ritual: Grizzly")[1], "grizzly row missing")
     assert(#env.chat == 2, "expected a second alert")
     assert(env.chat[2]:find("Grizzly is up", 1, true), env.chat[2])
-    assert(env.waypoints[#env.waypoints].mapID == 2437)
+    assert(env.pins[#env.pins].poiID == 8800)
 end)
 
 scenario("the same boss alerts again after it despawns and returns", function()
@@ -778,7 +812,7 @@ scenario("a child map of Eversong is included in the scan", function()
     assert(#env.chat == 1)
 end)
 
-scenario("a void incursion is shown alone and can be waypointed", function()
+scenario("a void incursion is shown alone and can be tracked", function()
     local env = boot(function(world)
         world.playerMap = 2437
         eversongWeek(world)
@@ -791,11 +825,10 @@ scenario("a void incursion is shown alone and can be waypointed", function()
     local strike = env.strikeWidgets()
     assert(strike.text == "Void Incursion", strike.text)
     assert(#env.chat == 0, "an incursion is not a watched boss")
-    env.button("Set waypoint"):Click()
-    assert(#env.waypoints == 1, "incursion waypoint missing")
-    assert(env.waypoints[1].mapID == 2437)
-    assert(env.waypoints[1].x == 0.44)
-    assert(env.waypoints[1].y == 0.71)
+    assert(#env.pins == 1, "auto track missed the incursion")
+    assert(env.pins[1].poiID == 2)
+    env.button("Track strike"):Click()
+    assert(env.pins[#env.pins].poiID == 2, "button did not track the incursion")
 end)
 
 scenario("a current event with a different name is still shown", function()
@@ -824,26 +857,26 @@ scenario("a secret strike name is shown and is not read as text", function()
     local strike = env.strikeWidgets()
     assert(strike.text == hidden, "secret name was dropped or stringified")
     assert(#env.chat == 0, "secret name was passed to string methods")
-    assert(#env.waypoints == 0)
+    assert(#env.pins == 1, "a readable poi id should still be tracked")
+    assert(env.pins[1].poiID == 8723)
 end)
 
-scenario("the waypoint check blocks the automatic pin and the button still sets it", function()
+scenario("auto track can be turned off and the button still tracks the strike", function()
     local env = boot(function(world)
         world.playerMap = 2395
         eversongWeek(world)
     end)
     enter(env, 2395)
-    local box = env.checks()[3]
+    local box = env.checks()[4]
     box:SetChecked(false)
     box:Click()
     env.addEvent(2395, { id = 8723, name = "Void Ritual: Croaker", x = 0.41, y = 0.62, isCurrentEvent = true })
     env.fire("AREA_POIS_UPDATED")
-    assert(#env.waypoints == 0, "checkbox off still dropped a pin")
+    assert(#env.pins == 0, "checkbox off still tracked the strike")
     assert(#env.chat == 1)
-    env.button("Set waypoint"):Click()
-    assert(#env.waypoints == 1, "button did not set a waypoint")
-    assert(env.waypoints[1].mapID == 2395)
-    assert(env.waypoints[1].x == 0.41)
+    env.button("Track strike"):Click()
+    assert(#env.pins == 1, "button did not track the strike")
+    assert(env.pins[1].poiID == 8723)
 end)
 
 scenario("the panel opens expanded and collapses to a borderless bar", function()
@@ -852,14 +885,14 @@ scenario("the panel opens expanded and collapses to a borderless bar", function(
         eversongWeek(world)
     end)
     local panel = env.panel()
-    assert(panel.height == 428, "panel should open expanded")
+    assert(panel.height == 214, "panel should open at the content height")
     for _, name in ipairs(env.UISpecialFrames) do
         assert(name ~= "CosmicSlayerFrame", "escape should leave the panel open")
     end
     assert(math.abs(panel.bg[4] - 0.78) < 0.001, "expanded backdrop should be ElvUI-dark")
     assert(panel.border[4] == 1)
     assert(env.button("Refresh"):IsShown())
-    assert(env.button("Track achievement"):IsShown())
+    assert(env.CosmicSlayerTrack:IsShown())
     assert(env.fontExact("3 / 15"))
     assert(env.CosmicSlayerResize:IsShown(), "resize grip shows while unlocked")
     panel.width = 360
@@ -890,16 +923,15 @@ scenario("the panel opens expanded and collapses to a borderless bar", function(
     assert(shownWaiting == 1 and hiddenWaiting == 1, "refresh time shows once while expanded")
     local toggle = env.CosmicSlayerCollapse
     toggle:Click()
-    assert(panel.height == 72, "collapsed height")
+    assert(panel.height == 76, "collapsed height")
     assert(math.abs(panel.bg[4] - 0.10) < 0.001, "collapsed backdrop should be 10% alpha")
     assert(panel.border[4] == 0, "collapsed view has no border")
     assert(env.CosmicSlayerResize:IsShown() == false, "resize grip hides while collapsed")
-    assert(env.button("Track achievement"):IsShown() == false)
+    assert(env.CosmicSlayerTrack:IsShown(), "achievement shield stays on the collapsed bar")
     assert(env.fontExact("Croaker is not up"):IsShown() == false)
     assert(env.button("Refresh"):IsShown())
     assert(env.CosmicSlayerRefresh:IsShown(), "refresh icon stays on the collapsed bar")
-    assert(env.button("Set waypoint"):IsShown())
-    assert(env.button("Set waypoint").label.text == "Set waypoint")
+    assert(env.button("Track strike"):IsShown())
     assert(env.CosmicSlayerLock:IsShown(), "lock stays on the collapsed bar")
     assert(env.CosmicSlayerSettingsButton:IsShown(), "gear stays on the collapsed bar")
     assert(panel.movable == true, "frame starts unlocked")

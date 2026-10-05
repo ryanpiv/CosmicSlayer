@@ -3,6 +3,17 @@ local ZONES = {
     { mapID = 2395, label = "Eversong Woods", short = "Eversong", bosses = { "Springclaw", "Croaker" } },
     { mapID = 2437, label = "Zul'Aman", short = "Zul'Aman", bosses = { "Grizzly" } },
 }
+-- Wowhead creature ids for the three Cosmic Slayer strike bosses.
+-- Croaker's in-game name is Void-Corrupted Dart Frog; there is no NPC named Croaker.
+local BOSSES = {
+    { npcID = 263912, name = "Void-Corrupted Springclaw Patriarch", mapID = 2395, x = 0.530, y = 0.394 },
+    { npcID = 252609, name = "Void-Corrupted Dart Frog", mapID = 2395, x = 0.560, y = 0.768 },
+    { npcID = 256589, name = "Void-Corrupted Matriarch", mapID = 2437, x = 0.320, y = 0.716 },
+}
+local BOSS_BY_ID = {}
+for _, boss in ipairs(BOSSES) do
+    BOSS_BY_ID[boss.npcID] = boss
+end
 local MAPS = {}
 local MAP_LABEL = {}
 local WATCH = {}
@@ -14,12 +25,12 @@ for _, zone in ipairs(ZONES) do
     end
 end
 local WEEK_REFRESH = 600
-local COLLAPSED_HEIGHT = 72
-local EXPANDED_WIDTH = 300
-local EXPANDED_HEIGHT = 428
-local MIN_WIDTH = 260
+local COLLAPSED_HEIGHT = 76
+local ICON = 18
+local CROSSHAIR = 22
+local EXPANDED_WIDTH = 340
+local MIN_WIDTH = 320
 local MAX_WIDTH = 640
-local MIN_HEIGHT = 340
 local MAX_HEIGHT = 900
 local FLAT = "Interface\\Buttons\\WHITE8X8"
 
@@ -57,7 +68,7 @@ local LEGACY_FILES = {
 }
 
 local SOUNDS = {
-    { name = "Raid warning", kit = "RAID_WARNING" },
+    { name = "Warning horn", kit = "RAID_WARNING" },
     { name = "Ready check", kit = "READY_CHECK" },
     { name = "Alarm", kit = "ALARM_CLOCK_WARNING_2" },
     { name = "Boss emote", kit = "RAID_BOSS_EMOTE_WARNING" },
@@ -70,6 +81,7 @@ local defaults = {
     screen = true,
     alertSound = "RAID_WARNING",
     waypoint = true,
+    bossPing = true,
     locked = false,
     collapsed = false,
     alpha = 1,
@@ -81,12 +93,12 @@ local defaults = {
     font = 1,
     fontSize = 12,
     width = EXPANDED_WIDTH,
-    height = EXPANDED_HEIGHT,
     poll = 15,
 }
 
 local active = {}
 local shown = {}
+local bossAlerted = {}
 local panel
 local rows = {}
 local zoneHeaders = {}
@@ -123,6 +135,7 @@ end
 local currentStrike
 local currentStrikeSecret
 local currentPin
+local trackedPoi
 local currentZone
 local currentEventCount = 0
 local lastScanClock
@@ -172,13 +185,13 @@ local function IsAchievementTracked()
 end
 
 local function RefreshTrackButton()
-    if not trackButton then
+    if not trackButton or not trackButton.icon then
         return
     end
     if IsAchievementTracked() then
-        trackButton:SetText("Untrack achievement")
+        trackButton.icon:SetVertexColor(1, 0.86, 0.35)
     else
-        trackButton:SetText("Track achievement")
+        trackButton.icon:SetVertexColor(1, 1, 1)
     end
 end
 
@@ -280,40 +293,36 @@ local function RefreshPanel()
     RefreshTrackButton()
 end
 
-local function PlaceWaypoint(mapID, x, y)
-    if not mapID or not x or not y or not UiMapPoint or not C_Map.SetUserWaypoint then
+local function TrackStrike(poiID)
+    if not poiID or issecretvalue(poiID) or not C_SuperTrack.SetSuperTrackedMapPin or not Enum or not Enum.SuperTrackingMapPinType then
         return false
     end
-    if issecretvalue(x) or issecretvalue(y) then
-        return false
-    end
-    local point = UiMapPoint.CreateFromCoordinates(mapID, x, y)
-    if not point then
-        return false
-    end
-    C_Map.SetUserWaypoint(point)
-    C_SuperTrack.SetSuperTrackedUserWaypoint(true)
+    C_SuperTrack.SetSuperTrackedMapPin(Enum.SuperTrackingMapPinType.AreaPOI, poiID)
+    trackedPoi = poiID
     return true
 end
 
-local function PointTo(mapID, info)
+local function AutoTrack(force)
     if not DB().waypoint then
         return
     end
-    local pos = info.position
-    if not pos or issecretvalue(pos) then
+    if not currentPin or not currentPin.poiID or issecretvalue(currentPin.poiID) then
+        trackedPoi = nil
         return
     end
-    PlaceWaypoint(mapID, pos.x, pos.y)
+    if not force and trackedPoi == currentPin.poiID then
+        return
+    end
+    TrackStrike(currentPin.poiID)
 end
 
-local function SetWaypoint()
-    if not currentPin then
-        DEFAULT_CHAT_FRAME:AddMessage("|cffc45cffCS|r No strike pin to mark.")
+local function TrackCurrentStrike()
+    if not currentPin or not currentPin.poiID or issecretvalue(currentPin.poiID) then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffc45cffCS|r No strike to track.")
         return
     end
-    if not PlaceWaypoint(currentPin.mapID, currentPin.x, currentPin.y) then
-        DEFAULT_CHAT_FRAME:AddMessage("|cffc45cffCS|r Could not set a waypoint.")
+    if not TrackStrike(currentPin.poiID) then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffc45cffCS|r Could not track that strike.")
     end
 end
 
@@ -335,19 +344,118 @@ local function PlayAlertSound()
     end
 end
 
-local function Alert(mapID, info)
+local function Alert(mapID, info, poiID)
     local db = DB()
     local boss = WatchedName(info.name) or info.name
     if db.chat then
         DEFAULT_CHAT_FRAME:AddMessage("|cffc45cffCS|r " .. info.name .. " is up.")
     end
     if db.screen and RaidNotice_AddMessage and RaidWarningFrame and ChatTypeInfo and ChatTypeInfo.RAID_WARNING then
-        RaidNotice_AddMessage(RaidWarningFrame, boss .. " is up", ChatTypeInfo.RAID_WARNING)
+        RaidNotice_AddMessage(RaidWarningFrame, "CS: " .. boss .. " is up", ChatTypeInfo.RAID_WARNING)
     end
     if db.sound then
         PlayAlertSound()
     end
-    PointTo(mapID, info)
+end
+
+local function BossFromText(text)
+    if not text then
+        return nil
+    end
+    for _, boss in ipairs(BOSSES) do
+        if text:find(boss.name, 1, true) then
+            return boss
+        end
+    end
+end
+
+local function NpcIDFromGUID(guid)
+    if not guid or issecretvalue(guid) or type(guid) ~= "string" then
+        return nil
+    end
+    local kind, _, _, _, _, id = strsplit("-", guid)
+    if kind ~= "Creature" and kind ~= "Vehicle" then
+        return nil
+    end
+    return tonumber(id)
+end
+
+local function AlertBoss(boss, poiID)
+    if not DB().bossPing or bossAlerted[boss.npcID] then
+        return
+    end
+    bossAlerted[boss.npcID] = true
+    local db = DB()
+    if db.chat then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffc45cffCS|r " .. boss.name .. " has spawned.")
+    end
+    if db.screen and RaidNotice_AddMessage and RaidWarningFrame and ChatTypeInfo and ChatTypeInfo.RAID_WARNING then
+        RaidNotice_AddMessage(RaidWarningFrame, "CS: " .. boss.name .. " has spawned", ChatTypeInfo.RAID_WARNING)
+    end
+    if db.sound then
+        PlayAlertSound()
+    end
+    if not poiID or issecretvalue(poiID) then
+        poiID = currentPin and currentPin.poiID
+    end
+    TrackStrike(poiID)
+end
+
+local function SeeBoss(found, boss, poiID)
+    if not boss then
+        return
+    end
+    found[boss.npcID] = true
+    AlertBoss(boss, poiID)
+end
+
+local function ObserveBosses()
+    local found = {}
+    if C_VignetteInfo and C_VignetteInfo.GetVignettes then
+        local vignettes = C_VignetteInfo.GetVignettes()
+        if vignettes and not issecretvalue(vignettes) then
+            for _, vignetteGUID in ipairs(vignettes) do
+                if not issecretvalue(vignetteGUID) then
+                    local info = C_VignetteInfo.GetVignetteInfo(vignetteGUID)
+                    if info and not issecretvalue(info) then
+                        local vignetteName = info.name
+                        if not vignetteName or issecretvalue(vignetteName) then
+                            vignetteName = nil
+                        end
+                        local boss = BOSS_BY_ID[NpcIDFromGUID(info.objectGUID)] or BossFromText(vignetteName)
+                        if boss then
+                            SeeBoss(found, boss)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if C_NamePlate and C_NamePlate.GetNamePlates then
+        local plates = C_NamePlate.GetNamePlates()
+        if plates and not issecretvalue(plates) then
+            for _, plate in ipairs(plates) do
+                if plate and not issecretvalue(plate) then
+                    local unit = plate.namePlateUnitToken
+                    if not unit or issecretvalue(unit) then
+                        unit = plate.UnitFrame and plate.UnitFrame.unit
+                    end
+                    if unit and not issecretvalue(unit) then
+                        local guidOK, guid = pcall(UnitGUID, unit)
+                        local boss = guidOK and BOSS_BY_ID[NpcIDFromGUID(guid)]
+                        if not boss then
+                            local nameOK, name = pcall(UnitName, unit)
+                            if nameOK and name and not issecretvalue(name) then
+                                boss = BossFromText(name)
+                            end
+                        end
+                        SeeBoss(found, boss)
+                    end
+                end
+            end
+        end
+    end
+    return found
 end
 
 local function MapHasAssault(mapID)
@@ -516,18 +624,15 @@ local function Scan()
     local incursionName
     local secretStrike
     local eventCount = 0
-    local pinMap, pinX, pinY
+    local pinPOI
     local pinRank = -1
     local strikeZone
-    local function Remember(mapID, info, rank)
-        local pos = info.position
-        if not pos or issecretvalue(pos) or issecretvalue(pos.x) or issecretvalue(pos.y) then
+    local poiBosses = {}
+    local function Remember(mapID, info, rank, id)
+        if not id or issecretvalue(id) or rank < pinRank then
             return
         end
-        if rank < pinRank then
-            return
-        end
-        pinMap, pinX, pinY = mapID, pos.x, pos.y
+        pinPOI = id
         pinRank = rank
     end
     for _, mapID in ipairs(MapsToScan()) do
@@ -548,29 +653,35 @@ local function Scan()
                         if plainName and (IsStrikeText(plainName) or IsStrikeText(plainDesc)) and not strikeSeen[plainName] then
                             strikeSeen[plainName] = true
                             tinsert(strikeList, plainName)
-                            Remember(mapID, info, WatchedName(plainName) and 4 or 3)
+                            Remember(mapID, info, WatchedName(plainName) and 4 or 3, id)
                             strikeZone = label or strikeZone
                         elseif plainName and (IsIncursionText(plainName) or IsIncursionText(plainDesc)) and not incursionName then
                             incursionName = plainName
-                            Remember(mapID, info, 2)
+                            Remember(mapID, info, 2, id)
                             strikeZone = label or strikeZone
                         elseif plainName and currentEvent and not currentSeen[plainName] then
                             currentSeen[plainName] = true
                             tinsert(currentNames, plainName)
-                            Remember(mapID, info, 1)
+                            Remember(mapID, info, 1, id)
                             strikeZone = label or strikeZone
                         elseif not plainName and info.name and issecretvalue(info.name) and not secretStrike then
                             secretStrike = info.name
-                            Remember(mapID, info, 0)
+                            Remember(mapID, info, 0, id)
                             strikeZone = label or strikeZone
                         end
                         local key = plainName and WatchedName(plainName)
                         if key and not seen[key] then
                             seen[key] = plainName
-                            Remember(mapID, info, 4)
+                            Remember(mapID, info, 4, id)
                             if not active[key] then
                                 active[key] = true
-                                Alert(mapID, info)
+                                Alert(mapID, info, id)
+                            end
+                        end
+                        if DB().bossPing then
+                            local boss = BossFromText(plainName) or BossFromText(plainDesc)
+                            if boss then
+                                SeeBoss(poiBosses, boss, id)
                             end
                         end
                     end
@@ -591,8 +702,8 @@ local function Scan()
     else
         currentStrike = nil
     end
-    if pinMap then
-        currentPin = { mapID = pinMap, x = pinX, y = pinY }
+    if pinPOI then
+        currentPin = { poiID = pinPOI }
     else
         currentPin = nil
     end
@@ -604,6 +715,19 @@ local function Scan()
             active[key] = nil
         end
     end
+    local seenBosses
+    if DB().bossPing then
+        seenBosses = ObserveBosses()
+        for npcID in pairs(poiBosses) do
+            seenBosses[npcID] = true
+        end
+        for npcID in pairs(bossAlerted) do
+            if not seenBosses[npcID] then
+                bossAlerted[npcID] = nil
+            end
+        end
+    end
+    AutoTrack()
     shown = seen
     RefreshPanel()
 end
@@ -611,7 +735,8 @@ end
 local function MakeCheck(label, key, y, parent)
     parent = parent or panel
     local box = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    box:SetPoint("TOPLEFT", 16, y)
+    box:SetSize(24, 24)
+    box:SetPoint("TOPLEFT", 12, y)
     box:SetScript("OnClick", function(self)
         DB()[key] = self:GetChecked() and true or false
     end)
@@ -622,6 +747,7 @@ local function MakeCheck(label, key, y, parent)
     local text = parent:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
     text:SetPoint("LEFT", box, "RIGHT", 2, 0)
     text:SetText(label)
+    box.label = text
     if parent == panel then
         TrackContent(text)
     else
@@ -637,29 +763,20 @@ local function AddDetail(widget)
     return widget
 end
 
-local function TintLines(button, r, g, b)
-    for _, line in ipairs(button.lines) do
-        line:SetVertexColor(r, g, b)
-    end
-end
-
-local function MarkButton(name, onClick, hint)
+local function IconButton(name, onClick, hint)
     local button = CreateFrame("Button", name, panel)
-    button:SetSize(16, 16)
-    button.lines = {}
-    local function line(width, rotation, x)
-        local tex = button:CreateTexture(nil, "OVERLAY")
-        tex:SetTexture(FLAT)
-        tex:SetSize(width, 1)
-        tex:SetPoint("CENTER", x or 0, 0)
-        tex:SetRotation(rotation)
-        tex:SetVertexColor(0.82, 0.86, 0.92)
-        tinsert(button.lines, tex)
-        return tex
-    end
-    button.line = line
+    button:SetSize(ICON, ICON)
+    local icon = button:CreateTexture(nil, "ARTWORK")
+    icon:SetAllPoints()
+    icon:SetAlpha(0.92)
+    button.icon = icon
+    local highlight = button:CreateTexture(nil, "HIGHLIGHT")
+    highlight:SetAllPoints()
+    highlight:SetTexture(FLAT)
+    highlight:SetVertexColor(1, 0.9, 0.55, 0.35)
+    button:SetHighlightTexture(highlight)
     button:SetScript("OnEnter", function(self)
-        TintLines(self, 1, 1, 1)
+        self.icon:SetAlpha(1)
         if hint and GameTooltip then
             local text = hint
             if type(hint) == "function" then
@@ -671,85 +788,62 @@ local function MarkButton(name, onClick, hint)
         end
     end)
     button:SetScript("OnLeave", function(self)
-        TintLines(self, 0.82, 0.86, 0.92)
+        self.icon:SetAlpha(0.92)
         if hint and GameTooltip_Hide then
             GameTooltip_Hide()
         end
     end)
     button:SetScript("OnClick", onClick)
+    if type(hint) == "string" then
+        button.text = hint
+    end
     return button
 end
 
-local function IconTexture(button, width, height)
-    local tex = button:CreateTexture(nil, "OVERLAY")
-    tex:SetTexture(FLAT)
-    tex:SetSize(width, height)
-    tex:SetVertexColor(0.82, 0.86, 0.92)
-    tinsert(button.lines, tex)
-    return tex
+local function UseTexture(button, path, inset)
+    button.icon:SetTexture(path)
+    inset = inset or 0
+    button.icon:SetTexCoord(inset, 1 - inset, inset, 1 - inset)
 end
 
-local function DrawRefresh(button)
-    local radius = 4.2
-    local head = math.rad(55)
-    local sweep = math.rad(280)
-    for i = 0, 6 do
-        local angle = head + sweep * (i / 6)
-        local seg = IconTexture(button, 3, 1)
-        seg:SetPoint("CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
-        seg:SetRotation(angle + math.pi / 2)
-    end
-    local tx = math.cos(head) * radius
-    local ty = math.sin(head) * radius
-    local dir = head - math.pi / 2
-    local upper = IconTexture(button, 4, 1)
-    upper:SetPoint("CENTER", tx - 1.2, ty + 0.6)
-    upper:SetRotation(dir + 0.75)
-    local lower = IconTexture(button, 4, 1)
-    lower:SetPoint("CENTER", tx - 1.2, ty - 0.6)
-    lower:SetRotation(dir - 0.75)
-end
+local LOCK_ICON = "Interface\\PetBattles\\PetBattle-LockIcon"
 
-local function DrawGrip(button)
-    for i = 0, 2 do
-        local line = IconTexture(button, 4 + i * 3, 1)
-        line:SetPoint("BOTTOMRIGHT", -1, 2 + i * 3)
-        line:SetRotation(math.rad(45))
-    end
-end
-
-local function DrawGear(button)
-    local hub = IconTexture(button, 4, 4)
-    hub:SetPoint("CENTER", 0, 0)
-    for i = 0, 7 do
-        local angle = i * (math.pi / 4)
-        local tooth = IconTexture(button, 2, 3)
-        tooth:SetPoint("CENTER", math.cos(angle) * 5.5, math.sin(angle) * 5.5)
-        tooth:SetRotation(angle)
-    end
-end
-
-local function DrawLock(button, locked)
-    if not button.body then
-        button.body = IconTexture(button, 8, 5)
-        button.shackleL = IconTexture(button, 1, 4)
-        button.shackleR = IconTexture(button, 1, 4)
-        button.shackleT = IconTexture(button, 7, 1)
-    end
-    button.body:ClearAllPoints()
-    button.body:SetPoint("CENTER", 0, -3)
-    button.shackleL:ClearAllPoints()
-    button.shackleR:ClearAllPoints()
-    button.shackleT:ClearAllPoints()
+local function UseLock(button, locked)
+    button:SetSize(ICON, ICON)
+    button.icon:SetTexture(LOCK_ICON)
+    button.icon:SetTexCoord(0.0546875, 0.9453125, 0.0703125, 0.9453125)
     if locked then
-        button.shackleL:SetPoint("CENTER", -3, 1)
-        button.shackleR:SetPoint("CENTER", 3, 1)
-        button.shackleT:SetPoint("CENTER", 0, 3)
+        button.icon:SetVertexColor(0.95, 0.93, 0.88)
     else
-        button.shackleL:SetPoint("CENTER", 1, 3)
-        button.shackleR:SetPoint("CENTER", 7, 3)
-        button.shackleT:SetPoint("CENTER", 4, 5)
+        button.icon:SetVertexColor(0.55, 0.58, 0.62)
     end
+end
+local function UseAtlas(button, atlas, fallback)
+    if C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(atlas) then
+        button.icon:SetAtlas(atlas)
+        return
+    end
+    if fallback then
+        UseTexture(button, fallback)
+    end
+end
+
+local function UseCrosshair(button)
+    button:SetSize(CROSSHAIR, CROSSHAIR)
+    button:SetClipsChildren(true)
+    button.icon:ClearAllPoints()
+    button.icon:SetVertexColor(1, 1, 1)
+    if C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo("TargetCrosshairs") then
+        button.icon:SetAtlas("TargetCrosshairs")
+        local scale = CROSSHAIR / 0.4
+        button.icon:SetSize(scale, scale)
+        button.icon:SetPoint("CENTER", (0.5 - 0.3) * scale, (0.3 - 0.5) * scale)
+        return
+    end
+    button.icon:SetTexture("Interface\\Cursor\\Crosshairs")
+    button.icon:SetTexCoord(0, 1, 0, 1)
+    button.icon:SetPoint("CENTER")
+    button.icon:SetSize(CROSSHAIR, CROSSHAIR)
 end
 
 local function PaintButton(button, quiet)
@@ -786,14 +880,17 @@ local function FlatButton(text, width, parent)
     TrackChrome(label)
     PaintButton(button, false)
     button:SetScript("OnEnter", function(self)
-        if not self.quiet then
-            self:SetBackdropBorderColor(0.45, 0.5, 0.56, 1)
-        end
-        TintButtonText(self, 1, 1, 1)
+        self:SetBackdropColor(0.18, 0.17, 0.14, 1)
+        self:SetBackdropBorderColor(0.9, 0.78, 0.35, 1)
+        TintButtonText(self, 1, 0.95, 0.75)
     end)
     button:SetScript("OnLeave", function(self)
         if not self.quiet then
+            self:SetBackdropColor(0.08, 0.08, 0.08, 0.95)
             self:SetBackdropBorderColor(0, 0, 0, 1)
+        else
+            self:SetBackdropColor(0, 0, 0, 0)
+            self:SetBackdropBorderColor(0, 0, 0, 0)
         end
         TintButtonText(self, 0.86, 0.88, 0.9)
     end)
@@ -881,37 +978,57 @@ local function Face()
     return { name = "Friz Quadrata", file = LEGACY_FILES[1] }
 end
 
+local function LineHeight()
+    return (DB().fontSize or 12) + 3
+end
+
+local function ZoneListTop()
+    local line = LineHeight()
+    return 10 + line + 6 + line + 10 + line + 2 + line + 2 + line + 12
+end
+
+local function ContentHeight()
+    local line = LineHeight()
+    local y = ZoneListTop()
+    local shown = false
+    for _, zone in ipairs(ZONES) do
+        if not weekMap or weekMap == zone.mapID then
+            shown = true
+            y = y + line + (#zone.bosses * line) + 6
+        end
+    end
+    if not shown then
+        y = y + line
+    end
+    return y + 10
+end
+
 local function CollapsedHeight()
     local size = DB().fontSize or 12
-    return math.max(COLLAPSED_HEIGHT, 8 + (size + 8) * 3)
+    return math.max(COLLAPSED_HEIGHT, 12 + (size + 8) * 3)
 end
 
 function LayoutBody()
-    local size = DB().fontSize or 12
-    local step = math.max(18, size + 6)
-    local y = -128
+    local line = LineHeight()
+    local y = -ZoneListTop()
     for _, zone in ipairs(ZONES) do
         local header = zoneHeaders[zone.mapID]
         if header and (not weekMap or weekMap == zone.mapID) then
             header:ClearAllPoints()
             header:SetPoint("TOPLEFT", 14, y)
-            y = y - step
+            header:SetJustifyH("LEFT")
+            header:SetSpacing(0)
+            y = y - line
             for _, key in ipairs(zone.bosses) do
                 local row = rows[key]
                 row:ClearAllPoints()
                 row:SetPoint("TOPLEFT", 28, y)
-                y = y - step
+                row:SetJustifyH("LEFT")
+                row:SetSpacing(0)
+                y = y - line
             end
-            y = y - 8
+            y = y - 6
         end
-    end
-    if checks.sound then
-        checks.sound:ClearAllPoints()
-        checks.sound:SetPoint("TOPLEFT", 16, y - 4)
-        checks.chat:ClearAllPoints()
-        checks.chat:SetPoint("TOPLEFT", 16, y - 32)
-        checks.waypoint:ClearAllPoints()
-        checks.waypoint:SetPoint("TOPLEFT", 16, y - 60)
     end
 end
 
@@ -1063,7 +1180,7 @@ end
 
 local function CreateSettings()
     settingsFrame = CreateFrame("Frame", "CosmicSlayerSettings", UIParent, "BackdropTemplate")
-    settingsFrame:SetSize(220, 478)
+    settingsFrame:SetSize(248, 540)
     settingsFrame:SetPoint("TOPLEFT", panel, "TOPRIGHT", 6, 0)
     settingsFrame:SetBackdrop({
         bgFile = FLAT,
@@ -1079,8 +1196,110 @@ local function CreateSettings()
     title:SetText("Settings")
     title:SetTextColor(0.9, 0.92, 0.94)
 
+    local function Section(text, y)
+        local label = TrackChrome(settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight"))
+        label:SetPoint("TOPLEFT", 12, y)
+        label:SetText(text)
+        label:SetTextColor(0.77, 0.36, 1)
+        return label
+    end
+
+    local function Tip(box, text)
+        box:HookScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(text, 1, 1, 1, 1, true)
+            GameTooltip:Show()
+        end)
+        box:HookScript("OnLeave", GameTooltip_Hide)
+    end
+
+    Section("Alerts", -28)
+    MakeCheck("Chat message", "chat", -46, settingsFrame)
+    Tip(checks.chat, "Print the alert in chat.")
+    MakeCheck("Screen banner", "screen", -74, settingsFrame)
+    Tip(checks.screen, "Show large text in the middle of the screen. This chooses how an alert looks, not which event sends it.")
+    MakeCheck("Play sound", "sound", -102, settingsFrame)
+    Tip(checks.sound, "Play the sound selected below when an alert fires.")
+
+    local soundLabel = TrackChrome(settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight"))
+    soundLabel:SetPoint("TOPLEFT", 12, -128)
+    soundLabel:SetText("Sound")
+    soundLabel:SetTextColor(0.7, 0.74, 0.78)
+
+    local soundButton = FlatButton(AlertSound().name, 220, settingsFrame)
+    soundButton:SetPoint("TOPLEFT", 12, -144)
+    local soundMenu
+    local soundRows = {}
+    local function ShowSoundMenu()
+        if not soundMenu then
+            soundMenu = CreateFrame("Frame", nil, settingsFrame, "BackdropTemplate")
+            soundMenu:SetFrameStrata("DIALOG")
+            soundMenu:SetBackdrop({
+                bgFile = FLAT,
+                edgeFile = FLAT,
+                edgeSize = 1,
+            })
+            soundMenu:SetBackdropColor(0.06, 0.06, 0.06, 0.96)
+            soundMenu:SetBackdropBorderColor(0, 0, 0, 1)
+            soundMenu:Hide()
+        end
+        for index, sound in ipairs(SOUNDS) do
+            local row = soundRows[index]
+            if not row then
+                row = FlatButton("", 212, soundMenu)
+                soundRows[index] = row
+                row:SetScript("OnClick", function(self)
+                    local db = DB()
+                    db.alertSound = self.soundKit
+                    soundButton.text = self.soundName
+                    soundButton.label:SetText(self.soundName)
+                    soundMenu:Hide()
+                    PlayAlertSound()
+                end)
+            end
+            row.soundKit = sound.kit
+            row.soundName = sound.name
+            row.text = sound.name
+            row.label:SetText(sound.name)
+            if sound.kit == DB().alertSound then
+                row.label:SetTextColor(1, 0.86, 0.35)
+            else
+                row.label:SetTextColor(0.86, 0.88, 0.9)
+            end
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", 4, -4 - ((index - 1) * 22))
+            row:SetSize(212, 20)
+            row:Show()
+        end
+        soundMenu:SetSize(220, #SOUNDS * 22 + 8)
+        soundMenu:ClearAllPoints()
+        soundMenu:SetPoint("TOPLEFT", soundButton, "BOTTOMLEFT", 0, -2)
+        soundMenu:Show()
+    end
+    soundButton:SetScript("OnClick", function()
+        if soundMenu and soundMenu:IsShown() then
+            soundMenu:Hide()
+            return
+        end
+        ShowSoundMenu()
+    end)
+    Tip(soundButton, "Choose the alert sound. The chosen sound plays when you pick it.")
+
+    Section("Tracking", -176)
+    MakeCheck("Auto track", "waypoint", -194, settingsFrame)
+    Tip(checks.waypoint, "Select the current strike on the map when that strike changes. The game drops the pin when the strike ends.")
+    checks.waypoint:HookScript("OnClick", function(self)
+        if self:GetChecked() then
+            AutoTrack(true)
+        end
+    end)
+    MakeCheck("Boss spawn ping", "bossPing", -222, settingsFrame)
+    Tip(checks.bossPing, "When the boss creature spawns, send an alert and track that strike. Separate from Screen banner, which only controls how alerts are shown.")
+
+    Section("Appearance", -250)
+
     local bgLabel = TrackChrome(settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight"))
-    bgLabel:SetPoint("TOPLEFT", 12, -40)
+    bgLabel:SetPoint("TOPLEFT", 12, -268)
     bgLabel:SetText("Background")
     bgLabel:SetTextColor(0.7, 0.74, 0.78)
 
@@ -1096,17 +1315,17 @@ local function CreateSettings()
     settingsSwatch.text = "Background"
     settingsSwatch:SetScript("OnClick", PickBackground)
 
-    MakeSlider(settingsFrame, "Transparency", 0.05, 1, 0.01, "transparency", -68, Percent)
-    MakeSlider(settingsFrame, "Collapsed transparency", 0.05, 1, 0.01, "collapsedTransparency", -116, Percent)
-    MakeSlider(settingsFrame, "Frame alpha", 0.15, 1, 0.01, "alpha", -164, Percent)
+    MakeSlider(settingsFrame, "Transparency", 0.05, 1, 0.01, "transparency", -292, Percent)
+    MakeSlider(settingsFrame, "Collapsed transparency", 0.05, 1, 0.01, "collapsedTransparency", -328, Percent)
+    MakeSlider(settingsFrame, "Frame alpha", 0.15, 1, 0.01, "alpha", -364, Percent)
 
     local fontLabel = TrackChrome(settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight"))
-    fontLabel:SetPoint("TOPLEFT", 12, -220)
+    fontLabel:SetPoint("TOPLEFT", 12, -400)
     fontLabel:SetText("Font")
     fontLabel:SetTextColor(0.7, 0.74, 0.78)
 
     local fontButton = FlatButton(Face().name, 180, settingsFrame)
-    fontButton:SetPoint("TOPLEFT", 12, -238)
+    fontButton:SetPoint("TOPLEFT", 12, -416)
     local fontMenu
     local fontRows = {}
     local function ShowFontMenu()
@@ -1217,43 +1436,30 @@ local function CreateSettings()
         ShowFontMenu()
     end)
 
-    MakeSlider(settingsFrame, "Font size", 10, 20, 1, "fontSize", -270, function(value)
+    MakeSlider(settingsFrame, "Font size", 10, 20, 1, "fontSize", -440, function(value)
         return tostring(math.floor(value + 0.5))
     end)
-    MakeSlider(settingsFrame, "Poll", 1, 60, 1, "poll", -318, function(value)
+
+    Section("Scanning", -476)
+    MakeSlider(settingsFrame, "Poll", 1, 60, 1, "poll", -494, function(value)
         return tostring(math.floor(value + 0.5)) .. "s"
     end)
+    settingsFrame:SetHeight(540)
+end
 
-    MakeCheck("Screen alert", "screen", -366, settingsFrame)
+local sizing
 
-    local soundLabel = TrackChrome(settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight"))
-    soundLabel:SetPoint("TOPLEFT", 12, -396)
-    soundLabel:SetText("Alert sound")
-    soundLabel:SetTextColor(0.7, 0.74, 0.78)
-
-    local soundButton = FlatButton(AlertSound().name, 180, settingsFrame)
-    soundButton:SetPoint("TOPLEFT", 12, -414)
-    soundButton:SetScript("OnClick", function(self)
-        local db = DB()
-        local index = 1
-        for i, sound in ipairs(SOUNDS) do
-            if sound.kit == db.alertSound then
-                index = i
-                break
-            end
-        end
-        local nextSound = SOUNDS[(index % #SOUNDS) + 1]
-        db.alertSound = nextSound.kit
-        self.text = nextSound.name
-        self.label:SetText(nextSound.name)
-        PlayAlertSound()
-    end)
+local function MinPanelWidth()
+    local size = DB().fontSize or 12
+    local titleWidth = math.ceil(size * 11.5)
+    return math.max(MIN_WIDTH, 14 + titleWidth + 12 + 156)
 end
 
 local function PanelWidth()
     local width = DB().width or EXPANDED_WIDTH
-    if width < MIN_WIDTH then
-        width = MIN_WIDTH
+    local minWidth = MinPanelWidth()
+    if width < minWidth then
+        width = minWidth
     end
     if width > MAX_WIDTH then
         width = MAX_WIDTH
@@ -1262,9 +1468,10 @@ local function PanelWidth()
 end
 
 local function PanelHeight()
-    local height = DB().height or EXPANDED_HEIGHT
-    if height < MIN_HEIGHT then
-        height = MIN_HEIGHT
+    local minHeight = ContentHeight()
+    local height = DB().height or minHeight
+    if height < minHeight then
+        height = minHeight
     end
     if height > MAX_HEIGHT then
         height = MAX_HEIGHT
@@ -1272,10 +1479,21 @@ local function PanelHeight()
     return height
 end
 
-function ApplyPanelSize()
-    if not panel then
+local function PinTopLeft()
+    local left, top = panel:GetLeft(), panel:GetTop()
+    if not left or not top then
         return
     end
+    panel:ClearAllPoints()
+    panel:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top)
+    DB().point = { "TOPLEFT", "BOTTOMLEFT", left, top }
+end
+
+function ApplyPanelSize()
+    if not panel or sizing then
+        return
+    end
+    PinTopLeft()
     if DB().collapsed then
         panel:SetSize(PanelWidth(), CollapsedHeight())
     else
@@ -1299,7 +1517,7 @@ local function ApplyResizeGrip()
     local usable = not DB().locked and not DB().collapsed
     panel:SetResizable(usable and true or false)
     if panel.SetResizeBounds then
-        panel:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+        panel:SetResizeBounds(MinPanelWidth(), ContentHeight(), MAX_WIDTH, MAX_HEIGHT)
     end
     if usable then
         resizeButton:Show()
@@ -1321,19 +1539,24 @@ local function ApplyLayout()
             widget:Show()
         end
     end
-    local tilt = math.rad(collapsed and 42 or -42)
-    collapseButton.lines[1]:SetRotation(tilt)
-    collapseButton.lines[2]:SetRotation(-tilt)
+    if collapsed then
+        UseTexture(collapseButton, "Interface\\Buttons\\UI-Panel-ExpandButton-Up", 0.2)
+    else
+        UseTexture(collapseButton, "Interface\\Buttons\\UI-Panel-CollapseButton-Up", 0.2)
+    end
     if collapsed then
         if settingsFrame then
             settingsFrame:Hide()
         end
         refreshedText:Show()
         progressText:ClearAllPoints()
+        progressText:SetWidth(math.max(40, PanelWidth() - 174))
+        progressText:SetJustifyH("LEFT")
+        progressText:SetJustifyV("TOP")
         progressText:SetPoint("TOPLEFT", 12, -8)
         progressText:SetSpacing(6)
         strikeText:ClearAllPoints()
-        strikeText:SetPoint("TOPLEFT", progressText, "BOTTOMLEFT", 0, -6)
+        strikeText:SetPoint("TOPLEFT", progressText, "BOTTOMLEFT", 0, -10)
         strikeText:SetWidth(PanelWidth() - 24)
         strikeText:SetSpacing(6)
         refreshedText:ClearAllPoints()
@@ -1341,31 +1564,33 @@ local function ApplyLayout()
         refreshedText:SetJustifyH("LEFT")
         refreshedText:SetSpacing(6)
         refreshButton:Show()
-        waypointButton:ClearAllPoints()
-        waypointButton:SetSize(104, 18)
-        waypointButton:SetPoint("RIGHT", refreshButton, "LEFT", -6, 0)
-        waypointButton:Show()
-        waypointButton.label:Show()
-        PaintButton(waypointButton, true)
     else
         refreshedText:Hide()
         progressText:ClearAllPoints()
-        progressText:SetPoint("TOPLEFT", 14, -34)
+        progressText:SetWidth(PanelWidth() - 28)
+        progressText:SetJustifyH("LEFT")
+        progressText:SetSpacing(0)
+        progressText:SetPoint("TOPLEFT", 14, -(10 + LineHeight() + 6))
+        strikeLabel:ClearAllPoints()
+        strikeLabel:SetJustifyH("LEFT")
+        strikeLabel:SetSpacing(0)
+        strikeLabel:SetPoint("TOPLEFT", progressText, "BOTTOMLEFT", 0, -10)
         strikeText:ClearAllPoints()
         strikeText:SetPoint("TOPLEFT", strikeLabel, "BOTTOMLEFT", 0, -2)
-        strikeText:SetWidth(PanelWidth() - 40)
-        strikeMeta:SetWidth(PanelWidth() - 40)
+        strikeText:SetWidth(PanelWidth() - 28)
+        strikeText:SetJustifyH("LEFT")
+        strikeMeta:SetWidth(PanelWidth() - 28)
+        strikeMeta:SetJustifyH("LEFT")
+        strikeMeta:SetSpacing(0)
         strikeText:SetSpacing(0)
         progressText:SetSpacing(0)
         refreshedText:SetSpacing(0)
         refreshButton:Show()
-        waypointButton:ClearAllPoints()
-        waypointButton:SetSize(140, 20)
-        waypointButton:SetPoint("LEFT", checks.waypoint, "RIGHT", 6, 0)
-        waypointButton:Show()
-        waypointButton.label:Show()
-        PaintButton(waypointButton, false)
     end
+    waypointButton:ClearAllPoints()
+    waypointButton:SetSize(CROSSHAIR, CROSSHAIR)
+    waypointButton:SetPoint("RIGHT", refreshButton, "LEFT", -2, 0)
+    waypointButton:Show()
     ApplyZoneList()
     ApplyStyle()
     ApplyResizeGrip()
@@ -1387,7 +1612,7 @@ local function ApplyLock()
     else
         panel:RegisterForDrag("LeftButton")
     end
-    DrawLock(lockButton, locked)
+    UseLock(lockButton, locked)
     ApplyResizeGrip()
 end
 
@@ -1416,7 +1641,7 @@ end
 
 local function CreatePanel()
     panel = CreateFrame("Frame", "CosmicSlayerFrame", UIParent, "BackdropTemplate")
-    panel:SetSize(300, EXPANDED_HEIGHT)
+    panel:SetSize(EXPANDED_WIDTH, 220)
     panel:SetPoint("CENTER")
     panel:SetBackdrop({
         bgFile = FLAT,
@@ -1437,30 +1662,35 @@ local function CreatePanel()
     end)
     panel:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
-        local point, _, relativePoint, x, y = self:GetPoint(1)
-        DB().point = { point, relativePoint, x, y }
+        if sizing then
+            return
+        end
+        PinTopLeft()
     end)
     panel:SetResizable(true)
     if panel.SetResizeBounds then
-        panel:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+        panel:SetResizeBounds(MIN_WIDTH, 180, MAX_WIDTH, MAX_HEIGHT)
     end
 
     resizeButton = CreateFrame("Button", "CosmicSlayerResize", panel)
-    resizeButton:SetSize(16, 16)
+    resizeButton:SetSize(ICON, ICON)
     resizeButton:SetPoint("BOTTOMRIGHT", -2, 2)
-    resizeButton.lines = {}
-    resizeButton.text = "Resize"
-    DrawGrip(resizeButton)
-    resizeButton:SetScript("OnEnter", function(self)
-        TintLines(self, 1, 1, 1)
+    resizeButton:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    resizeButton:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    resizeButton:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    local resizeHighlight = resizeButton:CreateTexture(nil, "HIGHLIGHT")
+    resizeHighlight:SetAllPoints()
+    resizeHighlight:SetTexture(FLAT)
+    resizeHighlight:SetVertexColor(1, 0.9, 0.55, 0.35)
+    resizeButton:SetHighlightTexture(resizeHighlight)
+    resizeButton:SetScript("OnEnter", function()
         if GameTooltip then
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetOwner(resizeButton, "ANCHOR_RIGHT")
             GameTooltip:SetText("Resize", 1, 1, 1, 1, true)
             GameTooltip:Show()
         end
     end)
-    resizeButton:SetScript("OnLeave", function(self)
-        TintLines(self, 0.82, 0.86, 0.92)
+    resizeButton:SetScript("OnLeave", function()
         if GameTooltip_Hide then
             GameTooltip_Hide()
         end
@@ -1469,6 +1699,8 @@ local function CreatePanel()
         if button ~= "LeftButton" or DB().locked or DB().collapsed then
             return
         end
+        sizing = true
+        PinTopLeft()
         panel:StartSizing("BOTTOMRIGHT")
     end)
     resizeButton:SetScript("OnMouseUp", function(_, button)
@@ -1476,6 +1708,7 @@ local function CreatePanel()
             return
         end
         panel:StopMovingOrSizing()
+        sizing = false
         if DB().locked or DB().collapsed then
             return
         end
@@ -1488,28 +1721,31 @@ local function CreatePanel()
         end
     end)
 
-    closeButton = MarkButton("CosmicSlayerClose", function()
+    closeButton = IconButton("CosmicSlayerClose", function()
         panel:Hide()
-    end)
+    end, "Close")
     closeButton:SetPoint("TOPRIGHT", -8, -8)
-    closeButton.line(10, math.rad(45), 0)
-    closeButton.line(10, math.rad(-45), 0)
+    UseAtlas(closeButton, "common-icon-redx")
 
-    collapseButton = MarkButton("CosmicSlayerCollapse", ToggleCollapsed)
+    collapseButton = IconButton("CosmicSlayerCollapse", ToggleCollapsed, function()
+        if DB().collapsed then
+            return "Expand"
+        end
+        return "Collapse"
+    end)
     collapseButton:SetPoint("RIGHT", closeButton, "LEFT", -2, 0)
-    collapseButton.line(7, math.rad(42), -2)
-    collapseButton.line(7, math.rad(-42), 2)
+    UseTexture(collapseButton, "Interface\\Buttons\\UI-Panel-CollapseButton-Up", 0.2)
 
-    lockButton = MarkButton("CosmicSlayerLock", ToggleLock, function()
+    lockButton = IconButton("CosmicSlayerLock", ToggleLock, function()
         if DB().locked then
             return "Unlock"
         end
         return "Lock"
     end)
     lockButton:SetPoint("RIGHT", collapseButton, "LEFT", -2, 0)
-    lockButton.text = "Lock"
+    UseLock(lockButton, false)
 
-    settingsButton = MarkButton("CosmicSlayerSettingsButton", function()
+    settingsButton = IconButton("CosmicSlayerSettingsButton", function()
         if settingsFrame:IsShown() then
             settingsFrame:Hide()
         else
@@ -1517,26 +1753,50 @@ local function CreatePanel()
         end
     end, "Settings")
     settingsButton:SetPoint("RIGHT", lockButton, "LEFT", -2, 0)
-    settingsButton.text = "Settings"
-    DrawGear(settingsButton)
+    UseTexture(settingsButton, "Interface\\Buttons\\UI-OptionsButton")
 
-    refreshButton = MarkButton("CosmicSlayerRefresh", Scan, "Refresh")
-    refreshButton:SetPoint("RIGHT", settingsButton, "LEFT", -2, 0)
-    refreshButton.text = "Refresh"
-    DrawRefresh(refreshButton)
+    trackButton = IconButton("CosmicSlayerTrack", TrackAchievement, function()
+        if IsAchievementTracked() then
+            return "Untrack"
+        end
+        return "Track"
+    end)
+    trackButton:SetPoint("RIGHT", settingsButton, "LEFT", -2, 0)
+    if C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo("UI-Achievement-Shield-2") then
+        UseAtlas(trackButton, "UI-Achievement-Shield-2")
+    else
+        UseAtlas(trackButton, "UI-Achievement-Shield-1")
+    end
+
+    refreshButton = IconButton("CosmicSlayerRefresh", Scan, "Refresh")
+    refreshButton:SetPoint("RIGHT", trackButton, "LEFT", -2, 0)
+    UseAtlas(refreshButton, "UI-RefreshButton", "Interface\\Buttons\\UI-RefreshButton")
+
+    waypointButton = IconButton(nil, TrackCurrentStrike, "Track strike")
+    waypointButton:SetPoint("RIGHT", refreshButton, "LEFT", -2, 0)
+    UseCrosshair(waypointButton)
 
     titleText = TrackContent(panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight"))
     titleText:SetPoint("TOPLEFT", 14, -10)
+    titleText:SetJustifyH("LEFT")
+    titleText:SetJustifyV("TOP")
+    titleText:SetWordWrap(false)
+    titleText:SetMaxLines(1)
     titleText:SetText("Cosmic Slayer")
-    titleText:SetTextColor(0.9, 0.92, 0.94)
+    titleText:SetTextColor(0.77, 0.36, 1)
     AddDetail(titleText)
 
     progressText = TrackContent(panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight"))
     progressText:SetPoint("TOPLEFT", 14, -34)
+    progressText:SetJustifyH("LEFT")
+    progressText:SetJustifyV("TOP")
+    progressText:SetSpacing(0)
     progressText:SetTextColor(0.92, 0.94, 0.96)
 
     strikeLabel = TrackContent(panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight"))
-    strikeLabel:SetPoint("TOPLEFT", 14, -56)
+    strikeLabel:SetPoint("TOPLEFT", progressText, "BOTTOMLEFT", 0, -10)
+    strikeLabel:SetJustifyH("LEFT")
+    strikeLabel:SetSpacing(0)
     strikeLabel:SetText("Current strike")
     strikeLabel:SetTextColor(0.55, 0.62, 0.68)
     AddDetail(strikeLabel)
@@ -1578,27 +1838,6 @@ local function CreatePanel()
         y = y - 8
     end
 
-    AddDetail(MakeCheck("Raid warning sound", "sound", y - 4))
-    AddDetail(checks.sound)
-    AddDetail(MakeCheck("Chat message", "chat", y - 32))
-    AddDetail(checks.chat)
-    AddDetail(MakeCheck("", "waypoint", y - 60))
-    checks.waypoint:HookScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("When checked, set a waypoint automatically when a watched boss is up.", 1, 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    checks.waypoint:HookScript("OnLeave", GameTooltip_Hide)
-
-    waypointButton = FlatButton("Set waypoint", 140)
-    waypointButton:SetPoint("LEFT", checks.waypoint, "RIGHT", 6, 0)
-    waypointButton:SetScript("OnClick", SetWaypoint)
-
-    trackButton = FlatButton("Track achievement", 180)
-    trackButton:SetPoint("BOTTOM", 0, 40)
-    trackButton:SetScript("OnClick", TrackAchievement)
-    AddDetail(trackButton)
-
     CreateSettings()
     ApplyLayout()
     ApplyLock()
@@ -1622,6 +1861,8 @@ frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 frame:RegisterEvent("AREA_POIS_UPDATED")
 frame:RegisterEvent("CRITERIA_UPDATE")
 frame:RegisterEvent("CONTENT_TRACKING_UPDATE")
+frame:RegisterEvent("VIGNETTES_UPDATED")
+frame:RegisterEvent("NAME_PLATE_UNIT_ADDED")
 frame:SetScript("OnEvent", function(_, event, name)
     if event == "ADDON_LOADED" then
         if name ~= "CosmicSlayer" then
@@ -1634,6 +1875,15 @@ frame:SetScript("OnEvent", function(_, event, name)
     end
     if event == "CRITERIA_UPDATE" or event == "CONTENT_TRACKING_UPDATE" then
         RefreshPanel()
+        return
+    end
+    if not CosmicSlayerDB then
+        return
+    end
+    if event == "VIGNETTES_UPDATED" or event == "NAME_PLATE_UNIT_ADDED" then
+        if DB().bossPing then
+            ObserveBosses()
+        end
         return
     end
     if event == "PLAYER_ENTERING_WORLD" then
